@@ -55,6 +55,61 @@ solver.solve()
 txx = solver.s_parameter([0, 0], polarization="xx")
 ```
 
+## Field Chunking
+
+`SolverOptions.field_chunk_size` limits the number of z samples handled by one
+field reconstruction batch.  `None` uses one batch per layer region.
+
+```python
+config = RCWAConfig(
+    freq=1 / 500,
+    order=(5, 5),
+    lattice=(300.0, 300.0),
+    options=SolverOptions(dtype=torch.complex64, device=torch.device("cuda"), field_chunk_size=16),
+)
+
+solver = RCWASolver(config).add_layer(80.0, eps=eps).solve()
+electric, magnetic = solver.field_plane(plane="xz", axis0=x_axis, axis1=z_axis, offset=150.0)
+electric_small_chunks, magnetic_small_chunks = solver.field_plane(
+    plane="xz",
+    axis0=x_axis,
+    axis1=z_axis,
+    offset=150.0,
+    chunk_size=4,
+)
+```
+
+## Fixed-Geometry Sweeps
+
+`solve_sweep` is an experimental loop-backed v2 API for fixed layer/material
+stacks.  It reuses the validated legacy solve path and benefits from the
+material convolution cache when the same non-gradient material tensors are used
+across sweep points.
+
+```python
+result = solver.solve_sweep(
+    freqs=torch.tensor([1 / 450, 1 / 500, 1 / 550], device=device),
+    incident_angles=0.0,
+    azimuth_angles=0.0,
+    requests=[
+        {"name": "txx", "orders": [0, 0], "polarization": "xx"},
+        {"name": "tyy", "orders": [0, 0], "polarization": "yy"},
+    ],
+)
+
+txx = result["txx"]
+```
+
+## Material Convolution Cache
+
+Non-gradient material tensors are cached by tensor identity, storage, version,
+shape, dtype, device, and Fourier order.  Tensors with `requires_grad=True` are
+not cached.
+
+```python
+torcwa.rcwa.clear_material_cache()
+```
+
 ## Numerical Behavior Changes
 
 - Coupling, Redheffer product, layer S-matrix, eig backward, and field

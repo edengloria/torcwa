@@ -26,6 +26,14 @@ The v2 target runtime is Python 3.10+ with PyTorch 2.11+.
   dense block-diagonal matrix.
 - Empty-stack S-matrix initialization now uses matrix-shaped zero reflection
   blocks, which fixes zero-layer reflection queries.
+- xz/yz field reconstruction now batches z samples by layer region and supports
+  chunking through v2 solver options.
+- Repeated solves reuse LU factorizations within a local computation, avoiding
+  persistent autograd graph caches.
+- Non-gradient material convolution matrices are cached across fixed-geometry
+  sweeps; gradient-carrying materials are excluded from the cache.
+- `RCWASolver.solve_sweep(...)` provides an experimental fixed-geometry
+  frequency/angle sweep API for requested S-parameters.
 
 ## Accuracy Policy
 

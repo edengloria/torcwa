@@ -19,3 +19,14 @@
   conservation, typo alias compatibility, v2 facade compatibility, finite field
   reconstruction, and finite geometry gradients.
 - Added `benchmarks/v2_microbench.py` and v2 QA/migration documentation.
+- Optimized developer-preview field reconstruction by batching xz/yz z-samples
+  by layer and honoring `SolverOptions.field_chunk_size` through v2
+  `field_plane(..., chunk_size=...)`.
+- Reused LU factorizations for repeated solve RHS groups in layer, Redheffer,
+  and field reconstruction paths.
+- Reduced dense k-vector diagonal hot paths by using normalized vector storage
+  internally while preserving `Kx_norm`/`Ky_norm` compatibility properties.
+- Added a bounded material convolution cache for non-gradient material tensors
+  and `rcwa.clear_material_cache()`.
+- Added experimental `RCWASolver.solve_sweep(...)` for fixed-geometry
+  frequency/angle S-parameter sweeps.

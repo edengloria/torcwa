@@ -146,6 +146,9 @@ This QA pass is sufficient for a developer-preview v2 foundation:
 - CPU/CUDA smoke workloads finite,
 - large CUDA order-20 stress workload finite,
 - reproducible benchmark script committed.
+- follow-up optimization patches added batched xz/yz field reconstruction,
+  local LU factor reuse, reduced k-vector diagonal hot paths, non-gradient
+  material convolution caching, and experimental fixed-geometry `solve_sweep`.
 
 It is not yet sufficient for a final physics major release.  Required release
 gates still outstanding:

@@ -95,6 +95,50 @@ class RCWASolver:
         finally:
             legacy.field_chunk_size = previous_chunk_size
 
+    def solve_sweep(
+        self,
+        freqs,
+        incident_angles=0.0,
+        azimuth_angles=0.0,
+        requests: list[dict] | None = None,
+    ) -> dict[str, torch.Tensor]:
+        """Loop-backed fixed-geometry frequency/angle sweep.
+
+        The initial v2 sweep API intentionally reuses the validated legacy
+        solve path and material convolution cache.  It supports fixed layer
+        stacks and returns only requested S-parameters.
+        """
+
+        cfg = self.config
+        options = cfg.options
+        real_dtype = options.real_dtype
+        freqs_tensor = torch.as_tensor(freqs, dtype=real_dtype, device=options.device).reshape([-1])
+        incident_tensor = self._sweep_values(incident_angles, len(freqs_tensor), real_dtype, options.device)
+        azimuth_tensor = self._sweep_values(azimuth_angles, len(freqs_tensor), real_dtype, options.device)
+        requests = requests or [{"name": "txx", "orders": [0, 0], "polarization": "xx"}]
+
+        outputs: dict[str, list[torch.Tensor]] = {}
+        for idx in range(len(freqs_tensor)):
+            input_layer = cfg.input_layer
+            output_layer = cfg.output_layer
+            if cfg.input_layer.angle_layer == "input":
+                input_layer = replace(input_layer, incident_angle=incident_tensor[idx], azimuth_angle=azimuth_tensor[idx])
+            else:
+                output_layer = replace(output_layer, incident_angle=incident_tensor[idx], azimuth_angle=azimuth_tensor[idx])
+
+            sweep_config = replace(cfg, freq=freqs_tensor[idx], input_layer=input_layer, output_layer=output_layer)
+            sweep_solver = RCWASolver(sweep_config)
+            sweep_solver.layers = list(self.layers)
+            sweep_solver.solve()
+            legacy = sweep_solver.legacy_solver()
+
+            for request_index, request in enumerate(requests):
+                request_kwargs = dict(request)
+                name = str(request_kwargs.pop("name", f"request_{request_index}"))
+                outputs.setdefault(name, []).append(legacy.S_parameters(**request_kwargs))
+
+        return {name: torch.stack(values, dim=0) for name, values in outputs.items()}
+
     def legacy_solver(self):
         return self._require_solved()
 
@@ -139,3 +183,12 @@ class RCWASolver:
         if isinstance(value, MaterialGrid):
             return value.values if value.cache else value.values.clone()
         return value
+
+    @staticmethod
+    def _sweep_values(value, count: int, dtype: torch.dtype, device: torch.device) -> torch.Tensor:
+        tensor = torch.as_tensor(value, dtype=dtype, device=device).reshape([-1])
+        if tensor.numel() == 1:
+            return tensor.expand(count)
+        if tensor.numel() != count:
+            raise ValueError("sweep angle inputs must be scalar or match freqs length")
+        return tensor

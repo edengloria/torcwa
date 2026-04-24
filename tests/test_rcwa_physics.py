@@ -3,7 +3,7 @@ import pytest
 torch = pytest.importorskip("torch")
 
 import torcwa
-from torcwa.v2 import RCWAConfig, RCWASolver, SolverOptions
+from torcwa.v2 import MaterialGrid, RCWAConfig, RCWASolver, SolverOptions
 from torcwa.v2.physics import fresnel_amplitudes
 
 
@@ -135,3 +135,35 @@ def test_material_convolution_cache_reuses_nongrad_tensor_only():
     sim3.set_incident_angle(0.0, 0.0)
     sim3.add_layer(thickness=40.0, eps=eps_grad)
     assert len(torcwa.rcwa._material_conv_cache) == 0
+
+
+def test_v2_solve_sweep_matches_manual_fixed_geometry_loop():
+    torcwa.rcwa.clear_material_cache()
+    device = torch.device("cpu")
+    dtype = torch.complex64
+    lattice = (300.0, 300.0)
+    geo = torcwa.geometry(Lx=lattice[0], Ly=lattice[1], nx=28, ny=28, edge_sharpness=30.0, dtype=torch.float32, device=device)
+    mask = geo.rectangle(Wx=110.0, Wy=90.0, Cx=150.0, Cy=150.0)
+    eps = MaterialGrid(mask * 2.25 + (1.0 - mask), lattice)
+    freqs = torch.tensor([1 / 450, 1 / 500, 1 / 550], dtype=torch.float32, device=device)
+
+    config = RCWAConfig(freq=freqs[0], order=(1, 1), lattice=lattice, options=SolverOptions(dtype=dtype, device=device))
+    solver = RCWASolver(config).add_layer(70.0, eps=eps)
+    sweep = solver.solve_sweep(
+        freqs,
+        requests=[
+            {"name": "txx", "orders": [0, 0], "polarization": "xx"},
+            {"name": "tyy", "orders": [0, 0], "polarization": "yy"},
+        ],
+    )
+
+    manual_txx, manual_tyy = [], []
+    for freq in freqs:
+        manual = RCWASolver(RCWAConfig(freq=freq, order=(1, 1), lattice=lattice, options=SolverOptions(dtype=dtype, device=device)))
+        manual.add_layer(70.0, eps=eps).solve()
+        manual_txx.append(manual.s_parameter([0, 0], polarization="xx"))
+        manual_tyy.append(manual.s_parameter([0, 0], polarization="yy"))
+
+    assert torch.allclose(sweep["txx"], torch.stack(manual_txx, dim=0))
+    assert torch.allclose(sweep["tyy"], torch.stack(manual_tyy, dim=0))
+    assert len(torcwa.rcwa._material_conv_cache) == 1

@@ -193,6 +193,45 @@ def bench_rcwa(device: torch.device, *, quick: bool) -> list[dict]:
     return records
 
 
+def bench_sweep_api(device: torch.device, *, quick: bool) -> list[dict]:
+    dtype = torch.complex64
+    order = (1, 1) if quick else (2, 2)
+    grid = 40 if quick else 64
+    repeats = 2 if quick else 4
+    warmup = 1
+    eps = _patterned_eps(device, grid=grid)
+    material = torcwa.v2.MaterialGrid(eps, (300.0, 300.0))
+    freqs = torch.tensor([1 / 450, 1 / 500, 1 / 550], dtype=torch.float32, device=device)
+
+    def sweep_case():
+        torcwa.rcwa.clear_material_cache()
+        config = torcwa.v2.RCWAConfig(
+            freq=freqs[0],
+            order=order,
+            lattice=(300.0, 300.0),
+            options=torcwa.v2.SolverOptions(dtype=dtype, device=device),
+        )
+        solver = torcwa.v2.RCWASolver(config).add_layer(80.0, eps=material)
+        return solver.solve_sweep(freqs, requests=[{"name": "txx", "orders": [0, 0], "polarization": "xx"}])["txx"]
+
+    sample = sweep_case()
+    finite = bool(torch.isfinite(torch.real(sample)).all() and torch.isfinite(torch.imag(sample)).all())
+    median_ms, min_ms, peak_mb = _measure(sweep_case, device=device, repeats=repeats, warmup=warmup)
+    return [
+        {
+            "workload": "v2_sweep",
+            "case": "fixed_geometry_three_freqs",
+            "device": str(device),
+            "dtype": str(dtype).replace("torch.", ""),
+            "size": f"order={list(order)} grid={grid}x{grid}",
+            "median_ms": median_ms,
+            "min_ms": min_ms,
+            "peak_cuda_mb": peak_mb,
+            "check": f"finite={finite}",
+        }
+    ]
+
+
 def bench_rcwa_stress(device: torch.device) -> list[dict]:
     dtype = torch.complex64
     cases = [(10, 160, 3)]
@@ -270,6 +309,7 @@ def main() -> None:
         records.extend(bench_solve_vs_inverse(device, quick=args.quick))
         records.extend(bench_diag_broadcast(device, quick=args.quick))
         records.extend(bench_rcwa(device, quick=args.quick))
+        records.extend(bench_sweep_api(device, quick=args.quick))
         if args.stress:
             records.extend(bench_rcwa_stress(device))
 
