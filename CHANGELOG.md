@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.2.0.dev1
+
+- Added committed Stanford S4 external-reference fixtures for homogeneous,
+  patterned, lossy, oblique-incidence, and multilayer RCWA validation.
+- Added `tools/generate_s4_fixtures.py`, `tools/build_s4_no_sudo.sh`, and the
+  `s4_live` pytest marker so S4 remains optional for normal QA but can refresh
+  fixtures in configured environments.
+- Added broader physical invariant tests covering Fabry-Perot slab phase,
+  Brewster suppression, near-critical evanescent classification, reciprocity,
+  field continuity, lossless conservation, lossy absorption, and gradient smoke.
+- Fixed a diagonal-free homogeneous `P/Q` block sign regression introduced in
+  the v2 optimization path; updated-vs-original TORCWA comparison now matches to
+  roundoff for the S4 core cases.
+- Tightened patterned S4 fixture tolerances enough to catch multilayer coupling
+  regressions while still allowing expected S4 closed-form geometry versus
+  TORCWA sampled-grid differences.
+- Documented the S4 no-sudo build path, current validation status, and the
+  original-vs-updated TORCWA regression diagnosis.
+
 ## 0.2.0.dev0
 
 - Added the `torcwa.v2` developer-preview API with dataclass configuration,
@@ -39,3 +58,10 @@
   `MaterialGrid(cache_key=..., cache=False)`.
 - Added a validation-only Fourier convolution operator prototype and review
   benchmark; it is not used by the solver path.
+- Added the S4 external-validation harness, pending fixture manifest, optional
+  fixture generator, `s4_live` pytest marker, and broader analytical/physical
+  invariant tests.
+- Added committed S4 core-gate fixtures and a no-sudo S4 build helper for
+  environments without system Python development headers.
+- Fixed a diagonal-free homogeneous `P/Q` block sign regression caught by
+  original-TORCWA and S4 multilayer-stack comparison.

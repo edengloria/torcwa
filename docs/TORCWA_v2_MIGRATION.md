@@ -8,7 +8,7 @@ legacy `torcwa.rcwa` workflow.
 - Python: 3.10+
 - PyTorch: 2.11+
 - CUDA: optional but recommended for high-order dense workloads
-- Package version in this branch: `0.2.0.dev0`
+- Package version in this branch: `0.2.0.dev1`
 
 ## Legacy Code Keeps Working
 
@@ -165,6 +165,14 @@ Run the Fourier operator review benchmark:
 
 ```bash
 python3 benchmarks/fourier_operator_review.py --quick --devices auto
+```
+
+Run the S4 live fixture smoke test when the official Stanford S4 Python
+extension is installed:
+
+```bash
+python3 -m pytest -q -m s4_live
+python3 tools/generate_s4_fixtures.py --overwrite
 ```
 
 ## Migration Recommendations

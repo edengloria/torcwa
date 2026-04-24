@@ -266,15 +266,62 @@ slower than dense assembly/matmul at the measured sizes.  Because the current
 eigensolver still requires dense matrices, the operator is not connected to the
 solver path.
 
+## S4 External Validation Harness
+
+Command:
+
+```bash
+python3 -m py_compile setup.py torcwa/*.py torcwa/v2/*.py tests/*.py benchmarks/*.py tools/*.py
+python3 -m pytest -q
+python3 -m pytest -q -m s4_live
+```
+
+Result in the current environment:
+
+```text
+28 passed, 7 skipped, 1 xfailed in 1.52s
+1 skipped, 35 deselected in 1.19s
+```
+
+What changed:
+
+- Added `references/s4/manifest.json` with the six-case S4 core gate.
+- Added `tools/generate_s4_fixtures.py` for official Stanford S4 fixture
+  generation.
+- Added S4 fixture comparison tests that run automatically when committed
+  `.npz` fixtures are present and skip pending fixture files otherwise.
+- Added the `s4_live` pytest marker for environments with the official S4
+  Python extension.
+- Added broader analytical/physical invariant tests: Fabry-Perot slab phase,
+  Brewster-angle TM reflection suppression, near-critical evanescent branch,
+  lossless conservation, reciprocity, tangential field continuity, and
+  finite-difference gradient comparison.
+
+S4 installation attempt:
+
+```text
+git clone --depth 1 https://github.com/victorliu/S4.git /tmp/S4-stanford
+make S4_pyext
+```
+
+The S4 core library compiled, but the Python extension failed because
+`Python.h` is unavailable.  Installing `python3-dev` requires sudo credentials in
+this environment, so genuine S4 `.npz` fixtures are still pending.  The PyPI
+package named `S4` was checked and rejected because it is not the Stanford RCWA
+solver.
+
+Known physics gate:
+
+- `test_lossy_slab_absorption_is_nonnegative` is marked `xfail`.  The current
+  homogeneous lossy slab check produces gain-like `R+T>1`, so this remains a
+  release-blocking convention/implementation issue to resolve against S4.
+
 It is not yet sufficient for a final physics major release.  Required release
 gates still outstanding:
 
-- external RCWA solver fixtures for at least one rectangular grating and one
-  multilayer metasurface,
-- oblique slab, Brewster, near-critical, lossy absorption, and reciprocity
-  analytical tests,
-- `complex128` gradcheck and finite-difference gradient sweeps across
-  eig broadening values,
+- official S4 `.npz` fixtures for the six-case core gate,
+- resolution of the lossy homogeneous slab absorption `xfail`,
+- broader `complex128` gradcheck sweeps across eig broadening values,
 - fully batched wavelength/angle/geometry sweep kernels beyond the current
   loop-backed v2 facade,
 - external validation before enabling any Fourier-operator or iterative

@@ -1,4 +1,4 @@
-**torcwa-0.2.0.dev0**
+**torcwa-0.2.0.dev1**
 ======
 
 * License: LGPL
@@ -65,7 +65,7 @@ $ python3 -m pytest -q
 
 <br/>
 
-Developer preview in 0.2.0.dev0
+Developer preview in 0.2.0.dev1
 ------------
 This branch starts an accuracy-first v2 refactor while preserving the legacy `torcwa.rcwa` workflow.
 
@@ -86,7 +86,12 @@ This branch starts an accuracy-first v2 refactor while preserving the legacy `to
    - [v2 QA and benchmark report](./docs/TORCWA_v2_QA_REPORT.md)
    - [v2 migration guide](./docs/TORCWA_v2_MIGRATION.md)
    - [Fourier operator review](./docs/TORCWA_v2_FOURIER_OPERATOR_REVIEW.md)
+   - [S4 external validation](./docs/TORCWA_v2_S4_VALIDATION.md)
    - [changelog](./CHANGELOG.md)
+
+8. S4-backed external validation fixtures are committed for the core QA gate.
+   S4 itself remains optional; `tools/build_s4_no_sudo.sh` documents and
+   automates a local build path for systems without sudo access.
 
 <br/>
 

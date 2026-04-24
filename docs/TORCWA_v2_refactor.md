@@ -41,6 +41,14 @@ The v2 target runtime is Python 3.10+ with PyTorch 2.11+.
   `4M x 4M` system.
 - A validation-only Fourier convolution operator prototype is available for
   dense-vs-operator review; it is not used by the solver path.
+- S4 is now the designated external RCWA reference solver.  The repository has a
+  pending S4 fixture manifest, optional fixture generator, and pytest harness
+  that compares committed fixtures when they are available.
+- The analytical/physical QA suite now includes Fabry-Perot slab phase,
+  Brewster-angle suppression, near-critical evanescent classification,
+  reciprocity, tangential field continuity, and finite-difference gradient
+  comparison.  Lossy slab absorption is tracked as a current `xfail` pending
+  S4-backed convention validation.
 
 ## Accuracy Policy
 
@@ -63,9 +71,9 @@ Changes to the numerical core should be accepted only after they pass:
 ## Release Gate
 
 This branch is a v2 developer-preview foundation, not yet a final physics
-release.  The local QA pass covers analytical normal-incidence checks, lossless
-power conservation for the interface case, CPU/CUDA smoke workloads, finite
-gradients, and reproducible microbenchmarks.  Before promoting this to a stable
-major release, add external-solver fixtures for representative gratings and
-metasurfaces and broaden the analytical suite to oblique slab/Brewster/near
-critical cases.
+release.  The local QA pass covers analytical normal/oblique interface checks,
+Fabry-Perot slab phase, lossless conservation, selected field-continuity and
+gradient checks, CPU/CUDA smoke workloads, and reproducible microbenchmarks.
+Before promoting this to a stable major release, generate and commit official S4
+fixtures for representative gratings/metasurfaces and resolve the current lossy
+slab absorption `xfail`.

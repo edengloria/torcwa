@@ -1,0 +1,67 @@
+{
+  "schema_version": 1,
+  "source": "Stanford S4",
+  "source_url": "https://web.stanford.edu/group/fan/S4/",
+  "s4_build": {
+    "source_commit": "3e19a16",
+    "notes": "S4 3e19a16 with local Python 3 build fixes"
+  },
+  "generated": true,
+  "generated_at": "2026-04-24T15:28:09.004168+00:00",
+  "torcwa_commit": "214b2efb4753474e7dbe046c2e3e2f3eb5d12a34",
+  "s4_options": {
+    "LatticeTruncation": "Parallelogramic",
+    "DiscretizedEpsilon": false,
+    "Verbosity": 0
+  },
+  "tolerances": {
+    "homogeneous": {
+      "rtol": 1e-08,
+      "atol": 1e-10
+    },
+    "patterned": {
+      "power_rtol": 0.02,
+      "power_atol": 0.002,
+      "amplitude_rtol": 0.05,
+      "atol": 5e-05
+    }
+  },
+  "cases": [
+    {
+      "name": "s4_uniform_slab",
+      "fixture": "s4_uniform_slab.npz",
+      "kind": "homogeneous",
+      "generated": true
+    },
+    {
+      "name": "s4_oblique_interface",
+      "fixture": "s4_oblique_interface.npz",
+      "kind": "homogeneous",
+      "generated": true
+    },
+    {
+      "name": "s4_1d_binary_grating",
+      "fixture": "s4_1d_binary_grating.npz",
+      "kind": "patterned",
+      "generated": true
+    },
+    {
+      "name": "s4_2d_rect_metasurface",
+      "fixture": "s4_2d_rect_metasurface.npz",
+      "kind": "patterned",
+      "generated": true
+    },
+    {
+      "name": "s4_lossy_grating",
+      "fixture": "s4_lossy_grating.npz",
+      "kind": "patterned",
+      "generated": true
+    },
+    {
+      "name": "s4_multilayer_stack",
+      "fixture": "s4_multilayer_stack.npz",
+      "kind": "patterned",
+      "generated": true
+    }
+  ]
+}

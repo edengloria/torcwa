@@ -1143,15 +1143,15 @@ class rcwa:
 
         # H to E transformation matirx
         P11 = torch.diag(kx*ky/eps)
-        P12 = -mu*eye - torch.diag(kx*kx/eps)
-        P21 = mu*eye + torch.diag(ky*ky/eps)
+        P12 = mu*eye - torch.diag(kx*kx/eps)
+        P21 = -mu*eye + torch.diag(ky*ky/eps)
         P22 = -torch.diag(ky*kx/eps)
         self.P.append(torch.hstack((torch.vstack((P11,P21)),torch.vstack((P12,P22)))))
 
         # E to H transformation matrix
         Q11 = -torch.diag(kx*ky/mu)
-        Q12 = eps*eye + torch.diag(kx*kx/mu)
-        Q21 = -eps*eye - torch.diag(ky*ky/mu)
+        Q12 = -eps*eye + torch.diag(kx*kx/mu)
+        Q21 = eps*eye - torch.diag(ky*ky/mu)
         Q22 = torch.diag(ky*kx/mu)
         self.Q.append(torch.hstack((torch.vstack((Q11,Q21)),torch.vstack((Q12,Q22)))))
         
