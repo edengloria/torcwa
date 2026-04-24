@@ -702,7 +702,6 @@ class rcwa:
         return torch.exp(1.j*self.omega*phase_arg)
 
     def _field_fourier_components(self,layer_id,z_prop):
-        Kx_norm, Ky_norm = self.Kx_norm, self.Ky_norm
         z_prop = z_prop.reshape([1,-1])
 
         if layer_id == -1 or layer_id == self.layer_N:
@@ -750,10 +749,10 @@ class rcwa:
 
             Ex_mn = Exy_p[:self.order_N] + Exy_m[:self.order_N]
             Ey_mn = Exy_p[self.order_N:] + Exy_m[self.order_N:]
-            Hz_mn = torch.matmul(Kx_norm,Ey_mn)/mu - torch.matmul(Ky_norm,Ex_mn)/mu
+            Hz_mn = self._dn_pre_multiply(self.Kx_norm_dn,Ey_mn)/mu - self._dn_pre_multiply(self.Ky_norm_dn,Ex_mn)/mu
             Hx_mn = Hxy_p[:self.order_N] + Hxy_m[:self.order_N]
             Hy_mn = Hxy_p[self.order_N:] + Hxy_m[self.order_N:]
-            Ez_mn = torch.matmul(Ky_norm,Hx_mn)/eps - torch.matmul(Kx_norm,Hy_mn)/eps
+            Ez_mn = self._dn_pre_multiply(self.Ky_norm_dn,Hx_mn)/eps - self._dn_pre_multiply(self.Kx_norm_dn,Hy_mn)/eps
 
             return [Ex_mn,Ey_mn,Ez_mn,Hx_mn,Hy_mn,Hz_mn]
 
@@ -776,12 +775,12 @@ class rcwa:
         Exy_p = E_eigvec.unsqueeze(-1)*z_phase_p.unsqueeze(0)
         Ex_p = Exy_p[:self.order_N,:,:]
         Ey_p = Exy_p[self.order_N:,:,:]
-        Hz_p_rhs = torch.matmul(Kx_norm,Ey_p.reshape([self.order_N,-1])) - torch.matmul(Ky_norm,Ex_p.reshape([self.order_N,-1]))
+        Hz_p_rhs = self._dn_pre_multiply(self.Kx_norm_dn,Ey_p.reshape([self.order_N,-1])) - self._dn_pre_multiply(self.Ky_norm_dn,Ex_p.reshape([self.order_N,-1]))
 
         Exy_m = E_eigvec.unsqueeze(-1)*z_phase_m.unsqueeze(0)
         Ex_m = Exy_m[:self.order_N,:,:]
         Ey_m = Exy_m[self.order_N:,:,:]
-        Hz_m_rhs = torch.matmul(Kx_norm,Ey_m.reshape([self.order_N,-1])) - torch.matmul(Ky_norm,Ex_m.reshape([self.order_N,-1]))
+        Hz_m_rhs = self._dn_pre_multiply(self.Kx_norm_dn,Ey_m.reshape([self.order_N,-1])) - self._dn_pre_multiply(self.Ky_norm_dn,Ex_m.reshape([self.order_N,-1]))
         Hz_p_flat, Hz_m_flat = solve_left_many(self.mu_conv[layer_id],[Hz_p_rhs,Hz_m_rhs])
         Hz_p = Hz_p_flat.reshape_as(Ex_p)
         Hz_m = Hz_m_flat.reshape_as(Ex_m)
@@ -789,12 +788,12 @@ class rcwa:
         Hxy_p = H_eigvec.unsqueeze(-1)*z_phase_p.unsqueeze(0)
         Hx_p = Hxy_p[:self.order_N,:,:]
         Hy_p = Hxy_p[self.order_N:,:,:]
-        Ez_p_rhs = torch.matmul(Ky_norm,Hx_p.reshape([self.order_N,-1])) - torch.matmul(Kx_norm,Hy_p.reshape([self.order_N,-1]))
+        Ez_p_rhs = self._dn_pre_multiply(self.Ky_norm_dn,Hx_p.reshape([self.order_N,-1])) - self._dn_pre_multiply(self.Kx_norm_dn,Hy_p.reshape([self.order_N,-1]))
 
         Hxy_m = -H_eigvec.unsqueeze(-1)*z_phase_m.unsqueeze(0)
         Hx_m = Hxy_m[:self.order_N,:,:]
         Hy_m = Hxy_m[self.order_N:,:,:]
-        Ez_m_rhs = torch.matmul(Ky_norm,Hx_m.reshape([self.order_N,-1])) - torch.matmul(Kx_norm,Hy_m.reshape([self.order_N,-1]))
+        Ez_m_rhs = self._dn_pre_multiply(self.Ky_norm_dn,Hx_m.reshape([self.order_N,-1])) - self._dn_pre_multiply(self.Kx_norm_dn,Hy_m.reshape([self.order_N,-1]))
         Ez_p_flat, Ez_m_flat = solve_left_many(self.eps_conv[layer_id],[Ez_p_rhs,Ez_m_rhs])
         Ez_p = Ez_p_flat.reshape_as(Hx_p)
         Ez_m = Ez_m_flat.reshape_as(Hx_m)
@@ -842,8 +841,6 @@ class rcwa:
         # [x, y, diffraction order]
         x_axis = x_axis.reshape([-1,1,1])
         y_axis = y_axis.reshape([1,-1,1])
-
-        Kx_norm, Ky_norm = self.Kx_norm, self.Ky_norm
 
         # Input and output layers
         if layer_num == -1 or layer_num == self.layer_N:
@@ -893,10 +890,10 @@ class rcwa:
 
             Ex_mn = Exy_p[:self.order_N] + Exy_m[:self.order_N]
             Ey_mn = Exy_p[self.order_N:] + Exy_m[self.order_N:]
-            Hz_mn = torch.matmul(Kx_norm,Ey_mn)/mu - torch.matmul(Ky_norm,Ex_mn)/mu
+            Hz_mn = self._dn_pre_multiply(self.Kx_norm_dn,Ey_mn)/mu - self._dn_pre_multiply(self.Ky_norm_dn,Ex_mn)/mu
             Hx_mn = Hxy_p[:self.order_N] + Hxy_m[:self.order_N]
             Hy_mn = Hxy_p[self.order_N:] + Hxy_m[self.order_N:]
-            Ez_mn = torch.matmul(Ky_norm,Hx_mn)/eps - torch.matmul(Kx_norm,Hy_mn)/eps
+            Ez_mn = self._dn_pre_multiply(self.Ky_norm_dn,Hx_mn)/eps - self._dn_pre_multiply(self.Kx_norm_dn,Hy_mn)/eps
 
             # Spatial domain fields
             xy_phase = torch.exp(1.j * self.omega * (self.Kx_norm_dn*x_axis + self.Ky_norm_dn*y_axis))
@@ -930,19 +927,19 @@ class rcwa:
             Exy_p = diag_post_multiply(E_eigvec,z_phase_p)
             Ex_p = Exy_p[:self.order_N,:]
             Ey_p = Exy_p[self.order_N:,:]
-            Hz_p = solve_left(self.mu_conv[layer_num],torch.matmul(Kx_norm,Ey_p) - torch.matmul(Ky_norm,Ex_p))
+            Hz_p = solve_left(self.mu_conv[layer_num],self._dn_pre_multiply(self.Kx_norm_dn,Ey_p) - self._dn_pre_multiply(self.Ky_norm_dn,Ex_p))
             Exy_m = diag_post_multiply(E_eigvec,z_phase_m)
             Ex_m = Exy_m[:self.order_N,:]
             Ey_m = Exy_m[self.order_N:,:]
-            Hz_m = solve_left(self.mu_conv[layer_num],torch.matmul(Kx_norm,Ey_m) - torch.matmul(Ky_norm,Ex_m))
+            Hz_m = solve_left(self.mu_conv[layer_num],self._dn_pre_multiply(self.Kx_norm_dn,Ey_m) - self._dn_pre_multiply(self.Ky_norm_dn,Ex_m))
             Hxy_p = diag_post_multiply(H_eigvec,z_phase_p)
             Hx_p = Hxy_p[:self.order_N,:]
             Hy_p = Hxy_p[self.order_N:,:]
-            Ez_p = solve_left(self.eps_conv[layer_num],torch.matmul(Ky_norm,Hx_p) - torch.matmul(Kx_norm,Hy_p))
+            Ez_p = solve_left(self.eps_conv[layer_num],self._dn_pre_multiply(self.Ky_norm_dn,Hx_p) - self._dn_pre_multiply(self.Kx_norm_dn,Hy_p))
             Hxy_m = diag_post_multiply(-H_eigvec,z_phase_m)
             Hx_m = Hxy_m[:self.order_N,:]
             Hy_m = Hxy_m[self.order_N:,:]
-            Ez_m = solve_left(self.eps_conv[layer_num],torch.matmul(Ky_norm,Hx_m) - torch.matmul(Kx_norm,Hy_m))
+            Ez_m = solve_left(self.eps_conv[layer_num],self._dn_pre_multiply(self.Ky_norm_dn,Hx_m) - self._dn_pre_multiply(self.Kx_norm_dn,Hy_m))
             
             Ex_mn = torch.matmul(Ex_p,Cp) + torch.matmul(Ex_m,Cm)
             Ey_mn = torch.matmul(Ey_p,Cp) + torch.matmul(Ey_m,Cm)
@@ -963,6 +960,18 @@ class rcwa:
         return [Ex, Ey, Ez], [Hx, Hy, Hz]
 
     # Internal functions
+    @property
+    def Kx_norm(self):
+        return torch.diag(self.Kx_norm_dn)
+
+    @property
+    def Ky_norm(self):
+        return torch.diag(self.Ky_norm_dn)
+
+    def _dn_pre_multiply(self,diagonal,tensor):
+        shape = [diagonal.shape[0]] + [1]*(tensor.dim()-1)
+        return diagonal.reshape(shape) * tensor
+
     def _matching_indices(self,orders):
         orders[orders[:,0]<-self.order[0],0] = int(-self.order[0])
         orders[orders[:,0]>self.order[0],0] = int(self.order[0])
@@ -988,8 +997,6 @@ class rcwa:
 
         self.Kx_norm_dn = torch.reshape(kx_norm_grid,(-1,))
         self.Ky_norm_dn = torch.reshape(ky_norm_grid,(-1,))
-        self.Kx_norm = torch.diag(self.Kx_norm_dn)
-        self.Ky_norm = torch.diag(self.Ky_norm_dn)
 
         Kz_norm_dn = torch.sqrt(1. - self.Kx_norm_dn**2 - self.Ky_norm_dn**2)
         Kz_norm_dn = torch.where(torch.imag(Kz_norm_dn)<0,torch.conj(Kz_norm_dn),Kz_norm_dn)
@@ -1057,14 +1064,23 @@ class rcwa:
         return material_convmat
     
     def _eigen_decomposition_homogenous(self,eps,mu):
+        kx = self.Kx_norm_dn
+        ky = self.Ky_norm_dn
+        eye = torch.eye(self.order_N,dtype=self._dtype,device=self._device)
+
         # H to E transformation matirx
-        self.P.append(torch.hstack((torch.vstack((torch.zeros_like(self.mu_conv[-1]),-self.mu_conv[-1])),
-            torch.vstack((self.mu_conv[-1],torch.zeros_like(self.mu_conv[-1]))))) +
-            1/eps * torch.matmul(torch.vstack((self.Kx_norm,self.Ky_norm)), torch.hstack((self.Ky_norm,-self.Kx_norm))))
+        P11 = torch.diag(kx*ky/eps)
+        P12 = -mu*eye - torch.diag(kx*kx/eps)
+        P21 = mu*eye + torch.diag(ky*ky/eps)
+        P22 = -torch.diag(ky*kx/eps)
+        self.P.append(torch.hstack((torch.vstack((P11,P21)),torch.vstack((P12,P22)))))
+
         # E to H transformation matrix
-        self.Q.append(torch.hstack((torch.vstack((torch.zeros_like(self.eps_conv[-1]),self.eps_conv[-1])),
-            torch.vstack((-self.eps_conv[-1],torch.zeros_like(self.eps_conv[-1]))))) +
-            1/mu * torch.matmul(torch.vstack((self.Kx_norm,self.Ky_norm)), torch.hstack((-self.Ky_norm,self.Kx_norm))))
+        Q11 = -torch.diag(kx*ky/mu)
+        Q12 = eps*eye + torch.diag(kx*kx/mu)
+        Q21 = -eps*eye - torch.diag(ky*ky/mu)
+        Q22 = torch.diag(ky*kx/mu)
+        self.Q.append(torch.hstack((torch.vstack((Q11,Q21)),torch.vstack((Q12,Q22)))))
         
         E_eigvec = torch.eye(self.P[-1].shape[-1],dtype=self._dtype,device=self._device)
         kz_norm = torch.sqrt(eps*mu - self.Kx_norm_dn**2 - self.Ky_norm_dn**2)
@@ -1075,14 +1091,26 @@ class rcwa:
         self.E_eigvec.append(E_eigvec)
 
     def _eigen_decomposition(self):
+        Kx_norm = torch.diag(self.Kx_norm_dn)
+        Ky_norm = torch.diag(self.Ky_norm_dn)
+
         # H to E transformation matirx
-        P_tmp = solve_right(self.eps_conv[-1], torch.vstack((self.Kx_norm,self.Ky_norm)))
+        P_tmp = solve_right(self.eps_conv[-1], torch.vstack((Kx_norm,Ky_norm)))
+        P_tmp_x = P_tmp[:self.order_N,:]
+        P_tmp_y = P_tmp[self.order_N:,:]
         self.P.append(torch.hstack((torch.vstack((torch.zeros_like(self.mu_conv[-1]),-self.mu_conv[-1])),
-            torch.vstack((self.mu_conv[-1],torch.zeros_like(self.mu_conv[-1]))))) + torch.matmul(P_tmp, torch.hstack((self.Ky_norm,-self.Kx_norm))))
+            torch.vstack((self.mu_conv[-1],torch.zeros_like(self.mu_conv[-1]))))) +
+            torch.hstack((torch.vstack((diag_post_multiply(P_tmp_x,self.Ky_norm_dn),diag_post_multiply(P_tmp_y,self.Ky_norm_dn))),
+                torch.vstack((-diag_post_multiply(P_tmp_x,self.Kx_norm_dn),-diag_post_multiply(P_tmp_y,self.Kx_norm_dn))))))
+
         # E to H transformation matrix
-        Q_tmp = solve_right(self.mu_conv[-1], torch.vstack((self.Kx_norm,self.Ky_norm)))
+        Q_tmp = solve_right(self.mu_conv[-1], torch.vstack((Kx_norm,Ky_norm)))
+        Q_tmp_x = Q_tmp[:self.order_N,:]
+        Q_tmp_y = Q_tmp[self.order_N:,:]
         self.Q.append(torch.hstack((torch.vstack((torch.zeros_like(self.eps_conv[-1]),self.eps_conv[-1])),
-            torch.vstack((-self.eps_conv[-1],torch.zeros_like(self.eps_conv[-1]))))) + torch.matmul(Q_tmp, torch.hstack((-self.Ky_norm,self.Kx_norm))))
+            torch.vstack((-self.eps_conv[-1],torch.zeros_like(self.eps_conv[-1]))))) +
+            torch.hstack((torch.vstack((-diag_post_multiply(Q_tmp_x,self.Ky_norm_dn),-diag_post_multiply(Q_tmp_y,self.Ky_norm_dn))),
+                torch.vstack((diag_post_multiply(Q_tmp_x,self.Kx_norm_dn),diag_post_multiply(Q_tmp_y,self.Kx_norm_dn))))))
         
         # Eigen-decomposition
         if self.stable_eig_grad is True:
