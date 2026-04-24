@@ -92,6 +92,8 @@ class MaterialGrid:
 
     values: torch.Tensor
     lattice: Tuple[float, float]
+    cache_key: object | None = None
+    cache: bool = True
 
     def __post_init__(self) -> None:
         if self.values.ndim != 2:

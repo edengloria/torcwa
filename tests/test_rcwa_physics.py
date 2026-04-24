@@ -110,3 +110,28 @@ def test_small_geometry_gradient_is_finite():
 
     assert radius.grad is not None
     assert torch.isfinite(radius.grad)
+
+
+def test_material_convolution_cache_reuses_nongrad_tensor_only():
+    torcwa.rcwa.clear_material_cache()
+    device = torch.device("cpu")
+    geo = torcwa.geometry(Lx=300.0, Ly=300.0, nx=24, ny=24, edge_sharpness=20.0, dtype=torch.float32, device=device)
+    mask = geo.rectangle(Wx=100.0, Wy=80.0, Cx=150.0, Cy=150.0)
+    eps = mask * 2.25 + (1.0 - mask)
+
+    sim1 = torcwa.rcwa(freq=1 / 500, order=[1, 1], L=[300.0, 300.0], dtype=torch.complex64, device=device)
+    sim1.set_incident_angle(0.0, 0.0)
+    sim1.add_layer(thickness=40.0, eps=eps)
+    assert len(torcwa.rcwa._material_conv_cache) == 1
+
+    sim2 = torcwa.rcwa(freq=1 / 550, order=[1, 1], L=[300.0, 300.0], dtype=torch.complex64, device=device)
+    sim2.set_incident_angle(0.0, 0.0)
+    sim2.add_layer(thickness=40.0, eps=eps)
+    assert len(torcwa.rcwa._material_conv_cache) == 1
+
+    torcwa.rcwa.clear_material_cache()
+    eps_grad = eps.detach().clone().requires_grad_(True)
+    sim3 = torcwa.rcwa(freq=1 / 500, order=[1, 1], L=[300.0, 300.0], dtype=torch.complex64, device=device)
+    sim3.set_incident_angle(0.0, 0.0)
+    sim3.add_layer(thickness=40.0, eps=eps_grad)
+    assert len(torcwa.rcwa._material_conv_cache) == 0

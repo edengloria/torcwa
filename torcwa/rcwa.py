@@ -1,3 +1,5 @@
+from collections import OrderedDict
+import weakref
 import warnings
 import torch
 from .torch_eig import Eig
@@ -6,6 +8,13 @@ from .v2.linalg import diag_post_multiply, lu_factor_left, lu_solve_left, solve_
 pi = 3.141592652589793
 
 class rcwa:
+    _material_conv_cache = OrderedDict()
+    _material_conv_cache_max = 32
+
+    @classmethod
+    def clear_material_cache(cls):
+        cls._material_conv_cache.clear()
+
     # Simulation setting
     def __init__(self,freq,order,L,*,
             dtype=torch.complex64,
@@ -1041,6 +1050,16 @@ class rcwa:
             self.Sout.append(2*Vtmp1_Vo)      # Tb S22
 
     def _material_conv(self,material):
+        cache_key, cache_ref = self._material_conv_cache_key(material)
+        if cache_key is not None:
+            cached = self._material_conv_cache.get(cache_key)
+            if cached is not None:
+                cached_ref, cached_value = cached
+                if cached_ref() is not None:
+                    self._material_conv_cache.move_to_end(cache_key)
+                    return cached_value
+                del self._material_conv_cache[cache_key]
+
         material_N = material.shape[0]*material.shape[1]
 
         # Matching indices
@@ -1060,8 +1079,34 @@ class rcwa:
         material_convmat_imag = (material_fft_imag[ox[indx]-ox[indy],oy[indx]-oy[indy]])
 
         material_convmat = torch.complex(material_convmat_real,material_convmat_imag)
+
+        if cache_key is not None:
+            self._material_conv_cache[cache_key] = (cache_ref,material_convmat)
+            self._material_conv_cache.move_to_end(cache_key)
+            while len(self._material_conv_cache) > self._material_conv_cache_max:
+                self._material_conv_cache.popitem(last=False)
         
         return material_convmat
+
+    def _material_conv_cache_key(self,material):
+        if not torch.is_tensor(material) or material.requires_grad:
+            return None,None
+        try:
+            material_ref = weakref.ref(material)
+        except TypeError:
+            return None,None
+        key = (
+            id(material),
+            material.data_ptr(),
+            getattr(material,'_version',0),
+            tuple(material.shape),
+            tuple(material.stride()),
+            int(material.storage_offset()),
+            str(material.dtype),
+            str(material.device),
+            tuple(int(v) for v in self.order),
+        )
+        return key,material_ref
     
     def _eigen_decomposition_homogenous(self,eps,mu):
         kx = self.Kx_norm_dn

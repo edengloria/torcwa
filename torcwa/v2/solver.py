@@ -5,7 +5,7 @@ from typing import Sequence
 
 import torch
 
-from .config import LayerSpec, PortSpec, RCWAConfig, SolverOptions
+from .config import LayerSpec, MaterialGrid, PortSpec, RCWAConfig, SolverOptions
 
 
 class RCWASolver:
@@ -130,6 +130,12 @@ class RCWASolver:
             angle_layer=angle_ref.angle_layer,
         )
         for layer in self.layers:
-            sim.add_layer(thickness=layer.thickness, eps=layer.eps, mu=layer.mu)
+            sim.add_layer(thickness=layer.thickness, eps=self._material_value(layer.eps), mu=self._material_value(layer.mu))
         self._legacy = sim
         return sim
+
+    @staticmethod
+    def _material_value(value):
+        if isinstance(value, MaterialGrid):
+            return value.values if value.cache else value.values.clone()
+        return value
