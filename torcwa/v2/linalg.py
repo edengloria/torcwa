@@ -16,6 +16,33 @@ def solve_left(A: torch.Tensor, B: torch.Tensor) -> torch.Tensor:
     return torch.linalg.solve(A, B)
 
 
+def lu_factor_left(A: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+    """Factor a matrix once for repeated left solves."""
+
+    lu, pivots, info = torch.linalg.lu_factor_ex(A)
+    if bool(torch.any(info != 0)):
+        raise RuntimeError("LU factorization failed for a solve matrix")
+    return lu, pivots
+
+
+def lu_solve_left(lu: torch.Tensor, pivots: torch.Tensor, B: torch.Tensor) -> torch.Tensor:
+    """Solve ``A @ X = B`` from a precomputed LU factorization."""
+
+    return torch.linalg.lu_solve(lu, pivots, B)
+
+
+def solve_left_many(A: torch.Tensor, rhs_list: list[torch.Tensor] | tuple[torch.Tensor, ...]) -> list[torch.Tensor]:
+    """Solve several RHS matrices with one LU factorization."""
+
+    if len(rhs_list) == 0:
+        return []
+    widths = [rhs.shape[-1] for rhs in rhs_list]
+    rhs = torch.cat(tuple(rhs_list), dim=-1)
+    lu, pivots = lu_factor_left(A)
+    solution = lu_solve_left(lu, pivots, rhs)
+    return list(torch.split(solution, widths, dim=-1))
+
+
 def solve_right(A: torch.Tensor, B: torch.Tensor) -> torch.Tensor:
     """Solve ``X @ A = B`` without forming ``A.inverse()``."""
 

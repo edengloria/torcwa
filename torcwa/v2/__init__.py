@@ -19,7 +19,10 @@ from .linalg import (
     diag_post_multiply,
     diag_pre_multiply,
     identity_like,
+    lu_factor_left,
+    lu_solve_left,
     solve_left,
+    solve_left_many,
     solve_right,
 )
 from .physics import (
@@ -45,8 +48,11 @@ __all__ = [
     "fresnel_amplitudes",
     "identity_like",
     "kz_branch",
+    "lu_factor_left",
+    "lu_solve_left",
     "propagating_mask",
     "solve_left",
+    "solve_left_many",
     "solve_right",
     "stabilized_eig",
 ]

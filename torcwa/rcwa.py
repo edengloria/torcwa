@@ -1,7 +1,7 @@
 import warnings
 import torch
 from .torch_eig import Eig
-from .v2.linalg import diag_post_multiply, solve_left, solve_right
+from .v2.linalg import diag_post_multiply, lu_factor_left, lu_solve_left, solve_left, solve_left_many, solve_right
 
 pi = 3.141592652589793
 
@@ -777,25 +777,27 @@ class rcwa:
         Ex_p = Exy_p[:self.order_N,:,:]
         Ey_p = Exy_p[self.order_N:,:,:]
         Hz_p_rhs = torch.matmul(Kx_norm,Ey_p.reshape([self.order_N,-1])) - torch.matmul(Ky_norm,Ex_p.reshape([self.order_N,-1]))
-        Hz_p = solve_left(self.mu_conv[layer_id],Hz_p_rhs).reshape_as(Ex_p)
 
         Exy_m = E_eigvec.unsqueeze(-1)*z_phase_m.unsqueeze(0)
         Ex_m = Exy_m[:self.order_N,:,:]
         Ey_m = Exy_m[self.order_N:,:,:]
         Hz_m_rhs = torch.matmul(Kx_norm,Ey_m.reshape([self.order_N,-1])) - torch.matmul(Ky_norm,Ex_m.reshape([self.order_N,-1]))
-        Hz_m = solve_left(self.mu_conv[layer_id],Hz_m_rhs).reshape_as(Ex_m)
+        Hz_p_flat, Hz_m_flat = solve_left_many(self.mu_conv[layer_id],[Hz_p_rhs,Hz_m_rhs])
+        Hz_p = Hz_p_flat.reshape_as(Ex_p)
+        Hz_m = Hz_m_flat.reshape_as(Ex_m)
 
         Hxy_p = H_eigvec.unsqueeze(-1)*z_phase_p.unsqueeze(0)
         Hx_p = Hxy_p[:self.order_N,:,:]
         Hy_p = Hxy_p[self.order_N:,:,:]
         Ez_p_rhs = torch.matmul(Ky_norm,Hx_p.reshape([self.order_N,-1])) - torch.matmul(Kx_norm,Hy_p.reshape([self.order_N,-1]))
-        Ez_p = solve_left(self.eps_conv[layer_id],Ez_p_rhs).reshape_as(Hx_p)
 
         Hxy_m = -H_eigvec.unsqueeze(-1)*z_phase_m.unsqueeze(0)
         Hx_m = Hxy_m[:self.order_N,:,:]
         Hy_m = Hxy_m[self.order_N:,:,:]
         Ez_m_rhs = torch.matmul(Ky_norm,Hx_m.reshape([self.order_N,-1])) - torch.matmul(Kx_norm,Hy_m.reshape([self.order_N,-1]))
-        Ez_m = solve_left(self.eps_conv[layer_id],Ez_m_rhs).reshape_as(Hx_m)
+        Ez_p_flat, Ez_m_flat = solve_left_many(self.eps_conv[layer_id],[Ez_p_rhs,Ez_m_rhs])
+        Ez_p = Ez_p_flat.reshape_as(Hx_p)
+        Ez_m = Ez_m_flat.reshape_as(Hx_m)
 
         Cp = Cp.reshape([1,-1,1])
         Cm = Cm.reshape([1,-1,1])
@@ -1005,12 +1007,13 @@ class rcwa:
 
             Vtmp1 = self.Vf+self.Vi
             Vtmp2 = self.Vf-self.Vi
+            Vtmp1_Vi, Vtmp1_Vtmp2, Vtmp1_Vf = solve_left_many(Vtmp1,[self.Vi,Vtmp2,self.Vf])
 
             # Input layer S-matrix
-            self.Sin.append(2*solve_left(Vtmp1,self.Vi))  # Tf S11
-            self.Sin.append(-solve_left(Vtmp1,Vtmp2))     # Rf S21
-            self.Sin.append(solve_left(Vtmp1,Vtmp2))      # Rb S12
-            self.Sin.append(2*solve_left(Vtmp1,self.Vf))  # Tb S22
+            self.Sin.append(2*Vtmp1_Vi)      # Tf S11
+            self.Sin.append(-Vtmp1_Vtmp2)    # Rf S21
+            self.Sin.append(Vtmp1_Vtmp2)     # Rb S12
+            self.Sin.append(2*Vtmp1_Vf)      # Tb S22
 
         if hasattr(self,'Sout'):
             # Output layer k-vectors and E to H transformation matrix
@@ -1022,12 +1025,13 @@ class rcwa:
 
             Vtmp1 = self.Vf+self.Vo
             Vtmp2 = self.Vf-self.Vo
+            Vtmp1_Vf, Vtmp1_Vtmp2, Vtmp1_Vo = solve_left_many(Vtmp1,[self.Vf,Vtmp2,self.Vo])
 
             # Output layer S-matrix
-            self.Sout.append(2*solve_left(Vtmp1,self.Vf))  # Tf S11
-            self.Sout.append(solve_left(Vtmp1,Vtmp2))      # Rf S21
-            self.Sout.append(-solve_left(Vtmp1,Vtmp2))     # Rb S12
-            self.Sout.append(2*solve_left(Vtmp1,self.Vo))  # Tb S22
+            self.Sout.append(2*Vtmp1_Vf)      # Tf S11
+            self.Sout.append(Vtmp1_Vtmp2)     # Rf S21
+            self.Sout.append(-Vtmp1_Vtmp2)    # Rb S12
+            self.Sout.append(2*Vtmp1_Vo)      # Tb S22
 
     def _material_conv(self,material):
         material_N = material.shape[0]*material.shape[1]
@@ -1093,11 +1097,13 @@ class rcwa:
     def _solve_layer_smatrix(self):
         phase = torch.exp(1.j*self.omega*self.kz_norm[-1]*self.thickness[-1])
         E_kz = diag_post_multiply(self.E_eigvec[-1],self.kz_norm[-1])
+        P_lu, P_pivots = lu_factor_left(self.P[-1])
 
         if self.avoid_Pinv_instability == True:
             eye = torch.eye(self.P[-1].shape[-1],dtype=self._dtype,device=self._device)
-            Pinv_tmp = solve_left(self.P[-1],eye)
-            Qinv_tmp = solve_left(self.Q[-1],eye)
+            Q_lu, Q_pivots = lu_factor_left(self.Q[-1])
+            Pinv_tmp = lu_solve_left(P_lu,P_pivots,eye)
+            Qinv_tmp = lu_solve_left(Q_lu,Q_pivots,eye)
             
             Pinv_ins_tmp1 = torch.max(torch.abs( torch.matmul(self.P[-1].detach(),Pinv_tmp.detach())-eye.to(self.P[-1]) ))
             Pinv_ins_tmp2 = torch.max(torch.abs( torch.matmul(Pinv_tmp.detach(),self.P[-1].detach())-eye.to(self.P[-1]) ))
@@ -1108,13 +1114,14 @@ class rcwa:
             self.Qinv_instability.append(torch.maximum(Qinv_ins_tmp1,Qinv_ins_tmp2))
 
             if self.Pinv_instability[-1] < self.max_Pinv_instability:
-                self.H_eigvec.append(solve_left(self.P[-1],E_kz))
+                self.H_eigvec.append(lu_solve_left(P_lu,P_pivots,E_kz))
             else:
                 self.H_eigvec.append(torch.matmul(self.Q[-1],diag_post_multiply(self.E_eigvec[-1],1/self.kz_norm[-1])))
         else:
-            self.H_eigvec.append(solve_left(self.P[-1],E_kz))
+            self.H_eigvec.append(lu_solve_left(P_lu,P_pivots,E_kz))
 
-        Vf_inv_H = solve_left(self.Vf,self.H_eigvec[-1])
+        Vf_lu, Vf_pivots = lu_factor_left(self.Vf)
+        Vf_inv_H = lu_solve_left(Vf_lu,Vf_pivots,self.H_eigvec[-1])
         E_plus = self.E_eigvec[-1] + Vf_inv_H
         E_minus = self.E_eigvec[-1] - Vf_inv_H
         E_minus_phase = diag_post_multiply(E_minus,phase)
@@ -1125,10 +1132,13 @@ class rcwa:
         Ctmp = torch.hstack((Ctmp1,Ctmp2))
 
         # Mode coupling coefficients
-        self.Cf.append(solve_left(Ctmp, torch.vstack((2*torch.eye(2*self.order_N,dtype=self._dtype,device=self._device),
-            torch.zeros([2*self.order_N,2*self.order_N],dtype=self._dtype,device=self._device))) ))
-        self.Cb.append(solve_left(Ctmp, torch.vstack((torch.zeros([2*self.order_N,2*self.order_N],dtype=self._dtype,device=self._device),
-            2*torch.eye(2*self.order_N,dtype=self._dtype,device=self._device))) ))
+        Cf_rhs = torch.vstack((2*torch.eye(2*self.order_N,dtype=self._dtype,device=self._device),
+            torch.zeros([2*self.order_N,2*self.order_N],dtype=self._dtype,device=self._device)))
+        Cb_rhs = torch.vstack((torch.zeros([2*self.order_N,2*self.order_N],dtype=self._dtype,device=self._device),
+            2*torch.eye(2*self.order_N,dtype=self._dtype,device=self._device)))
+        Cf, Cb = solve_left_many(Ctmp,[Cf_rhs,Cb_rhs])
+        self.Cf.append(Cf)
+        self.Cb.append(Cb)
 
         self.layer_S11.append(torch.matmul(E_phase, self.Cf[-1][:2*self.order_N,:]) + torch.matmul(self.E_eigvec[-1],self.Cf[-1][2*self.order_N:,:]))
         self.layer_S21.append(torch.matmul(self.E_eigvec[-1], self.Cf[-1][:2*self.order_N,:]) + torch.matmul(E_phase,self.Cf[-1][2*self.order_N:,:])
@@ -1144,10 +1154,8 @@ class rcwa:
         eye = torch.eye(2*self.order_N,dtype=self._dtype,device=self._device)
         tmp1_matrix = eye - torch.matmul(Sm[2],Sn[1])
         tmp2_matrix = eye - torch.matmul(Sn[1],Sm[2])
-        tmp1_Sm0 = solve_left(tmp1_matrix,Sm[0])
-        tmp1_Sm2Sn3 = solve_left(tmp1_matrix,torch.matmul(Sm[2],Sn[3]))
-        tmp2_Sn1Sm0 = solve_left(tmp2_matrix,torch.matmul(Sn[1],Sm[0]))
-        tmp2_Sn3 = solve_left(tmp2_matrix,Sn[3])
+        tmp1_Sm0, tmp1_Sm2Sn3 = solve_left_many(tmp1_matrix,[Sm[0],torch.matmul(Sm[2],Sn[3])])
+        tmp2_Sn1Sm0, tmp2_Sn3 = solve_left_many(tmp2_matrix,[torch.matmul(Sn[1],Sm[0]),Sn[3]])
 
         # Layer S-matrix
         S11 = torch.matmul(Sn[0],tmp1_Sm0)
