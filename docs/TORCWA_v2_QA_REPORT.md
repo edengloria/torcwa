@@ -150,6 +150,48 @@ This QA pass is sufficient for a developer-preview v2 foundation:
   local LU factor reuse, reduced k-vector diagonal hot paths, non-gradient
   material convolution caching, and experimental fixed-geometry `solve_sweep`.
 
+## Follow-Up Optimization QA
+
+Command:
+
+```bash
+python3 -m py_compile setup.py torcwa/*.py torcwa/v2/*.py tests/*.py benchmarks/*.py
+python3 -m pytest -q
+python3 benchmarks/v2_microbench.py --quick --devices cuda --stress
+```
+
+Result:
+
+```text
+17 passed in 1.61s
+```
+
+CUDA stress benchmark after the follow-up optimization series:
+
+```text
+| workload | case | device | dtype | size | median ms | min ms | peak CUDA MB | check |
+|---|---|---:|---|---|---:|---:|---:|---|
+| field_reconstruction | xz_plane | cuda | complex64 | order=[2, 2] samples=(20, 12) | 4.367 | 4.299 | 9.72 | finite=True |
+| v2_sweep | fixed_geometry_three_freqs | cuda | complex64 | order=[1, 1] grid=40x40 | 23.150 | 22.897 | 8.47 | finite=True |
+| rcwa_stress | patterned_single_layer | cuda | complex64 | order=[10, 10] grid=160x160 | 254.939 | 250.277 | 256.31 | finite=True |
+| rcwa_stress | patterned_single_layer | cuda | complex64 | order=[15, 15] grid=224x224 | 928.573 | 890.135 | 1179.61 | finite=True |
+| rcwa_stress | patterned_single_layer | cuda | complex64 | order=[20, 20] grid=300x300 | 2906.402 | 2731.858 | 3596.07 | finite=True |
+```
+
+Spot comparison against `18efa78`:
+
+```text
+interface_cpu   maxabs 0.000e+00 rel 0.000e+00 base 1.011 ms current 0.927 ms
+field_cuda      maxabs 2.529e-07 rel 1.059e-07 base 52.028 ms current 40.722 ms peak 8.77 -> 9.73 MB
+stress10_cuda   maxabs 1.333e-07 rel 1.335e-07 base 368.250 ms current 302.187 ms peak 199.40 -> 259.99 MB
+stress20_cuda   maxabs 0.000e+00 rel 0.000e+00 base 3084.278 ms current 2696.103 ms peak 2769.16 -> 3631.98 MB
+```
+
+The optimization series improves field reconstruction and high-order CUDA
+runtime in these spot checks, but peak CUDA memory increases for stress
+workloads.  A later memory-focused pass should reduce LU workspace/block
+assembly pressure before claiming whole-solver memory improvement.
+
 It is not yet sufficient for a final physics major release.  Required release
 gates still outstanding:
 
