@@ -1,0 +1,45 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements-dev.txt
+
+      - name: Compile Python files
+        run: |
+          python -m py_compile setup.py torcwa/*.py torcwa/v2/*.py tests/*.py benchmarks/*.py tools/*.py
+
+      - name: Run tests
+        run: |
+          python -m pytest -q
+
+      - name: Run CPU quick benchmark
+        run: |
+          python benchmarks/v2_microbench.py --quick --devices cpu
