@@ -6,6 +6,7 @@ from typing import Literal, Optional, Sequence, Tuple
 import torch
 
 FourierFactorization = Literal["legacy-compatible", "direct", "inverse"]
+MemoryMode = Literal["balanced", "memory", "speed"]
 AngleLayer = Literal["input", "output"]
 
 
@@ -44,12 +45,15 @@ class SolverOptions:
     fourier_factorization: FourierFactorization = "legacy-compatible"
     compile: bool = False
     field_chunk_size: Optional[int] = None
+    memory_mode: MemoryMode = "balanced"
 
     def __post_init__(self) -> None:
         if self.dtype not in (torch.complex64, torch.complex128):
             raise ValueError("dtype must be torch.complex64 or torch.complex128")
         if self.fourier_factorization not in ("legacy-compatible", "direct", "inverse"):
             raise ValueError("unknown Fourier factorization mode")
+        if self.memory_mode not in ("balanced", "memory", "speed"):
+            raise ValueError("memory_mode must be 'balanced', 'memory', or 'speed'")
         if self.field_chunk_size is not None and self.field_chunk_size <= 0:
             raise ValueError("field_chunk_size must be positive when provided")
 

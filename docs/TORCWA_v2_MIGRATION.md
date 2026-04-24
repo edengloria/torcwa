@@ -46,7 +46,7 @@ config = RCWAConfig(
     freq=1 / 500,
     order=(5, 5),
     lattice=(300.0, 300.0),
-    options=SolverOptions(dtype=torch.complex64, device=torch.device("cuda")),
+    options=SolverOptions(dtype=torch.complex64, device=torch.device("cuda"), memory_mode="balanced"),
 )
 
 solver = RCWASolver(config)
@@ -57,8 +57,9 @@ txx = solver.s_parameter([0, 0], polarization="xx")
 
 ## Field Chunking
 
-`SolverOptions.field_chunk_size` limits the number of z samples handled by one
-field reconstruction batch.  `None` uses one batch per layer region.
+`SolverOptions.field_chunk_size` limits the number of z/spatial samples handled
+by one field reconstruction tile.  `None` uses a memory-mode dependent automatic
+chunk size.
 
 ```python
 config = RCWAConfig(
@@ -103,12 +104,26 @@ txx = result["txx"]
 ## Material Convolution Cache
 
 Non-gradient material tensors are cached by tensor identity, storage, version,
-shape, dtype, device, and Fourier order.  Tensors with `requires_grad=True` are
-not cached.
+shape, dtype, device, tensor layout flags, user cache namespace, and Fourier
+order.  Tensors with `requires_grad=True` are not cached.
 
 ```python
 torcwa.rcwa.clear_material_cache()
+
+eps_grid = torcwa.v2.MaterialGrid(eps, lattice=(300.0, 300.0), cache_key=("unit-cell", 0))
+eps_no_cache = torcwa.v2.MaterialGrid(eps, lattice=(300.0, 300.0), cache=False)
 ```
+
+## Memory Policy
+
+`SolverOptions.memory_mode` controls workspace policy:
+
+- `"balanced"` is the default.  It avoids the largest exact block assemblies and
+  is the recommended mode for high-order CUDA workloads.
+- `"memory"` uses the same low-workspace solver path and smaller automatic field
+  chunks.
+- `"speed"` preserves the more aggressive repeated-RHS LU path where extra peak
+  workspace is acceptable.
 
 ## Numerical Behavior Changes
 
@@ -118,6 +133,10 @@ torcwa.rcwa.clear_material_cache()
 - Diagonal phase products in layer field reconstruction use broadcasting.
 - p/s source conversion avoids allocating a dense block-diagonal conversion
   matrix.
+- Homogeneous input/output transforms are stored in structured order-wise `2x2`
+  form internally and materialized only for compatibility access.
+- Layer coupling uses an exact block-symmetric solve in balanced/memory modes
+  instead of assembling the larger `4M x 4M` system.
 - Empty stacks now produce matrix-shaped zero reflection blocks, so reflection
   S-parameter queries are valid even with no internal layers.
 
@@ -140,6 +159,12 @@ Run the CUDA stress benchmark:
 
 ```bash
 python3 benchmarks/v2_microbench.py --quick --devices cuda --stress
+```
+
+Run the Fourier operator review benchmark:
+
+```bash
+python3 benchmarks/fourier_operator_review.py --quick --devices auto
 ```
 
 ## Migration Recommendations

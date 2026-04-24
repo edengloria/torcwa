@@ -30,3 +30,12 @@
   and `rcwa.clear_material_cache()`.
 - Added experimental `RCWASolver.solve_sweep(...)` for fixed-geometry
   frequency/angle S-parameter sweeps.
+- Added `SolverOptions.memory_mode` with balanced, memory, and speed policies.
+- Reduced balanced-mode peak memory by avoiding dense homogeneous-transform
+  storage and replacing the layer-coupling `4M x 4M` solve with exact block
+  symmetric `2M x 2M` solves.
+- Streamed `field_xy` and added spatial-axis chunking for `field_xz`/`field_yz`.
+- Strengthened material convolution cache keys and honored
+  `MaterialGrid(cache_key=..., cache=False)`.
+- Added a validation-only Fourier convolution operator prototype and review
+  benchmark; it is not used by the solver path.

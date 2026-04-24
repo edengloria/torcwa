@@ -27,13 +27,20 @@ The v2 target runtime is Python 3.10+ with PyTorch 2.11+.
 - Empty-stack S-matrix initialization now uses matrix-shaped zero reflection
   blocks, which fixes zero-layer reflection queries.
 - xz/yz field reconstruction now batches z samples by layer region and supports
-  chunking through v2 solver options.
+  z/spatial chunking through v2 solver options.  `field_xy` also streams spatial
+  tiles instead of materializing the full `(x, y, order)` phase tensor at once.
 - Repeated solves reuse LU factorizations within a local computation, avoiding
   persistent autograd graph caches.
 - Non-gradient material convolution matrices are cached across fixed-geometry
   sweeps; gradient-carrying materials are excluded from the cache.
 - `RCWASolver.solve_sweep(...)` provides an experimental fixed-geometry
   frequency/angle sweep API for requested S-parameters.
+- `SolverOptions.memory_mode` controls balanced/memory/speed policy.  Balanced
+  mode stores homogeneous transforms structurally and solves the exact
+  block-symmetric layer coupling problem without assembling the larger
+  `4M x 4M` system.
+- A validation-only Fourier convolution operator prototype is available for
+  dense-vs-operator review; it is not used by the solver path.
 
 ## Accuracy Policy
 

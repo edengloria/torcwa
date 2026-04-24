@@ -77,12 +77,15 @@ This branch starts an accuracy-first v2 refactor while preserving the legacy `to
 
 4. The eigendecomposition backward path no longer saves tensors on CPU, reducing CUDA synchronization/copy overhead.
 
-5. Field reconstruction batching, local LU factor reuse, material convolution caching, and experimental fixed-geometry `RCWASolver.solve_sweep(...)` are available for v2 validation workflows.
+5. Field reconstruction batching/streaming, local LU factor reuse, material convolution caching, and experimental fixed-geometry `RCWASolver.solve_sweep(...)` are available for v2 validation workflows.
 
-6. Validation and benchmark artifacts are included in:
+6. `SolverOptions(memory_mode="balanced" | "memory" | "speed")` controls the memory/runtime policy for developer-preview v2 solves. The default `balanced` path avoids the largest homogeneous-interface and layer-coupling block assemblies.
+
+7. Validation and benchmark artifacts are included in:
    - [v2 refactor notes](./docs/TORCWA_v2_refactor.md)
    - [v2 QA and benchmark report](./docs/TORCWA_v2_QA_REPORT.md)
    - [v2 migration guide](./docs/TORCWA_v2_MIGRATION.md)
+   - [Fourier operator review](./docs/TORCWA_v2_FOURIER_OPERATOR_REVIEW.md)
    - [changelog](./CHANGELOG.md)
 
 <br/>

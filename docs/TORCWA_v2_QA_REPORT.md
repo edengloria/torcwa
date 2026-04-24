@@ -192,6 +192,80 @@ runtime in these spot checks, but peak CUDA memory increases for stress
 workloads.  A later memory-focused pass should reduce LU workspace/block
 assembly pressure before claiming whole-solver memory improvement.
 
+## Memory-Balanced Optimization QA
+
+Command:
+
+```bash
+python3 -m py_compile setup.py torcwa/*.py torcwa/v2/*.py tests/*.py benchmarks/*.py
+python3 -m pytest -q
+python3 benchmarks/v2_microbench.py --quick --devices cuda --stress --memory-modes balanced memory speed
+python3 benchmarks/fourier_operator_review.py --quick --devices cpu
+python3 benchmarks/fourier_operator_review.py --quick --devices cuda
+```
+
+Result:
+
+```text
+20 passed in 1.51s
+```
+
+Spot comparison against the pre-patch `21040fe` HEAD:
+
+```text
+interface_tss        maxabs 0.000e+00 rel 0.000e+00 pass
+interface_rss        maxabs 0.000e+00 rel 0.000e+00 pass
+pattern_txx_cpu      maxabs 0.000e+00 rel 0.000e+00 pass
+pattern_tyy_cpu      maxabs 0.000e+00 rel 0.000e+00 pass
+pattern_txx_cuda     maxabs 0.000e+00 rel 0.000e+00 pass
+field_xz_Ex_cuda     maxabs 0.000e+00 rel 0.000e+00 pass
+field_xz_Hz_cuda     maxabs 0.000e+00 rel 0.000e+00 pass
+field_xy_Ex_cuda     maxabs 0.000e+00 rel 0.000e+00 pass
+field_xy_Hz_cuda     maxabs 0.000e+00 rel 0.000e+00 pass
+stress10_txx_cuda    maxabs 0.000e+00 rel 0.000e+00 pass
+stress20_txx_cuda    maxabs 0.000e+00 rel 0.000e+00 pass_rel_3e-3
+stress20_tyy_cuda    maxabs 0.000e+00 rel 0.000e+00 pass_rel_3e-3
+```
+
+CUDA stress memory policy benchmark:
+
+```text
+| mode | order/grid | median ms | peak CUDA MB | previous peak MB |
+|---|---|---:|---:|---:|
+| balanced | order=[10,10] grid=160x160 | 324.875 | 153.82 | 256.31 |
+| balanced | order=[15,15] grid=224x224 | 898.422 | 700.40 | 1179.61 |
+| balanced | order=[20,20] grid=300x300 | 2778.271 | 2129.93 | 3596.07 |
+| memory | order=[20,20] grid=300x300 | 2797.326 | 2160.02 | 3596.07 |
+| speed | order=[20,20] grid=300x300 | 2965.970 | 3570.05 | 3596.07 |
+```
+
+Interpretation:
+
+- The default `balanced` mode now reduces order-20 stress peak CUDA allocation by
+  about 41% versus the prior LU-heavy follow-up state, while preserving identical
+  S-parameter outputs in the sampled cases.
+- The reduction comes from structured homogeneous transforms, exact
+  block-symmetric layer coupling solves, and conservative repeated-RHS solve
+  policy.  The non-homogeneous dense eigensolver path is intentionally unchanged.
+- `field_xy` now streams spatial tiles and `field_xz/field_yz` stream both z and
+  transverse axes.  Small field planes may run slower when automatic chunks are
+  selected, but peak field workspace stays bounded.
+
+Fourier convolution operator review summary:
+
+```text
+CPU  c64 rectangle order=[3,3]: dense 0.243 ms, operator 0.806 ms, rel 1.42e-07
+CPU  c128 rectangle order=[3,3]: dense 0.103 ms, operator 0.832 ms, rel 2.32e-16
+CUDA c64 rectangle order=[3,3]: dense 0.320 ms, operator 5.414 ms, rel 1.59e-07
+CUDA c128 rectangle order=[3,3]: dense 0.408 ms, operator 4.813 ms, rel 3.56e-16
+```
+
+The validation-only operator matches the dense convention and has finite
+material gradients in the smoke cases, but the direct operator prototype is much
+slower than dense assembly/matmul at the measured sizes.  Because the current
+eigensolver still requires dense matrices, the operator is not connected to the
+solver path.
+
 It is not yet sufficient for a final physics major release.  Required release
 gates still outstanding:
 
@@ -201,5 +275,7 @@ gates still outstanding:
   analytical tests,
 - `complex128` gradcheck and finite-difference gradient sweeps across
   eig broadening values,
-- batched wavelength/angle/geometry sweep API and memory-bounded field
-  chunking beyond the current facade.
+- fully batched wavelength/angle/geometry sweep kernels beyond the current
+  loop-backed v2 facade,
+- external validation before enabling any Fourier-operator or iterative
+  eigensolver path in production.

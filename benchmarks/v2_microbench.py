@@ -232,39 +232,41 @@ def bench_sweep_api(device: torch.device, *, quick: bool) -> list[dict]:
     ]
 
 
-def bench_rcwa_stress(device: torch.device) -> list[dict]:
+def bench_rcwa_stress(device: torch.device, *, memory_modes: tuple[str, ...] = ("balanced",)) -> list[dict]:
     dtype = torch.complex64
     cases = [(10, 160, 3)]
     if device.type == "cuda":
         cases.extend([(15, 224, 2), (20, 300, 2)])
 
     records = []
-    for order, grid, repeats in cases:
-        eps = _patterned_eps(device, grid=grid)
+    for memory_mode in memory_modes:
+        for order, grid, repeats in cases:
+            eps = _patterned_eps(device, grid=grid)
 
-        def solve_case():
-            sim = torcwa.rcwa(freq=1 / 500, order=[order, order], L=[300.0, 300.0], dtype=dtype, device=device)
-            sim.set_incident_angle(0.0, 0.0)
-            sim.add_layer(thickness=80.0, eps=eps)
-            sim.solve_global_smatrix()
-            return sim.S_parameters([0, 0], polarization="xx")
+            def solve_case():
+                sim = torcwa.rcwa(freq=1 / 500, order=[order, order], L=[300.0, 300.0], dtype=dtype, device=device)
+                sim.memory_mode = memory_mode
+                sim.set_incident_angle(0.0, 0.0)
+                sim.add_layer(thickness=80.0, eps=eps)
+                sim.solve_global_smatrix()
+                return sim.S_parameters([0, 0], polarization="xx")
 
-        sample = solve_case()
-        finite = bool(torch.isfinite(torch.real(sample)).all() and torch.isfinite(torch.imag(sample)).all())
-        median_ms, min_ms, peak_mb = _measure(solve_case, device=device, repeats=repeats, warmup=1)
-        records.append(
-            {
-                "workload": "rcwa_stress",
-                "case": "patterned_single_layer",
-                "device": str(device),
-                "dtype": str(dtype).replace("torch.", ""),
-                "size": f"order=[{order}, {order}] grid={grid}x{grid}",
-                "median_ms": median_ms,
-                "min_ms": min_ms,
-                "peak_cuda_mb": peak_mb,
-                "check": f"finite={finite}",
-            }
-        )
+            sample = solve_case()
+            finite = bool(torch.isfinite(torch.real(sample)).all() and torch.isfinite(torch.imag(sample)).all())
+            median_ms, min_ms, peak_mb = _measure(solve_case, device=device, repeats=repeats, warmup=1)
+            records.append(
+                {
+                    "workload": "rcwa_stress",
+                    "case": f"patterned_single_layer/{memory_mode}",
+                    "device": str(device),
+                    "dtype": str(dtype).replace("torch.", ""),
+                    "size": f"order=[{order}, {order}] grid={grid}x{grid}",
+                    "median_ms": median_ms,
+                    "min_ms": min_ms,
+                    "peak_cuda_mb": peak_mb,
+                    "check": f"finite={finite}",
+                }
+            )
     return records
 
 
@@ -299,6 +301,7 @@ def main() -> None:
     parser.add_argument("--quick", action="store_true", help="Use smaller matrices and fewer repeats")
     parser.add_argument("--devices", choices=("auto", "cpu", "cuda"), default="auto")
     parser.add_argument("--stress", action="store_true", help="Also run larger order/grid RCWA smoke benchmarks")
+    parser.add_argument("--memory-modes", nargs="+", choices=("balanced", "memory", "speed"), default=("balanced",), help="Memory policy modes for stress benchmarks")
     parser.add_argument("--json", action="store_true", help="Emit JSON instead of a markdown table")
     args = parser.parse_args()
 
@@ -311,7 +314,7 @@ def main() -> None:
         records.extend(bench_rcwa(device, quick=args.quick))
         records.extend(bench_sweep_api(device, quick=args.quick))
         if args.stress:
-            records.extend(bench_rcwa_stress(device))
+            records.extend(bench_rcwa_stress(device, memory_modes=tuple(args.memory_modes)))
 
     if args.json:
         print(json.dumps({"torch": torch.__version__, "cuda": torch.version.cuda, "records": records}, indent=2))

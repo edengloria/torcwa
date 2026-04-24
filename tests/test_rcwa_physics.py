@@ -94,6 +94,13 @@ def test_v2_facade_matches_legacy_for_patterned_layer_and_fields():
     assert [tuple(component.shape) for component in yz_magnetic] == [(7, 5), (7, 5), (7, 5)]
     assert torch.isfinite(torch.real(yz_electric[0])).all()
 
+    xy_electric, xy_magnetic = v2.field_plane(plane="xy", axis0=x_axis, axis1=y_axis, layer_num=0, offset=20.0)
+    xy_electric_chunked, xy_magnetic_chunked = v2.field_plane(plane="xy", axis0=x_axis, axis1=y_axis, layer_num=0, offset=20.0, chunk_size=2)
+    assert [tuple(component.shape) for component in xy_electric] == [(8, 7), (8, 7), (8, 7)]
+    assert [tuple(component.shape) for component in xy_magnetic] == [(8, 7), (8, 7), (8, 7)]
+    assert torch.allclose(xy_electric_chunked[0], xy_electric[0])
+    assert torch.allclose(xy_magnetic_chunked[0], xy_magnetic[0])
+
 
 def test_small_geometry_gradient_is_finite():
     radius = torch.tensor(65.0, dtype=torch.float64, requires_grad=True)
@@ -135,6 +142,27 @@ def test_material_convolution_cache_reuses_nongrad_tensor_only():
     sim3.set_incident_angle(0.0, 0.0)
     sim3.add_layer(thickness=40.0, eps=eps_grad)
     assert len(torcwa.rcwa._material_conv_cache) == 0
+
+    torcwa.rcwa.clear_material_cache()
+    no_cache = MaterialGrid(eps, (300.0, 300.0), cache_key=("rect", 1), cache=False)
+    config = RCWAConfig(freq=1 / 500, order=(1, 1), lattice=(300.0, 300.0), options=SolverOptions(dtype=torch.complex64, device=device))
+    RCWASolver(config).add_layer(40.0, eps=no_cache).solve()
+    assert len(torcwa.rcwa._material_conv_cache) == 0
+
+
+def test_v2_memory_mode_reaches_legacy_solver_and_validates():
+    device = torch.device("cpu")
+    config = RCWAConfig(
+        freq=1 / 500,
+        order=(0, 0),
+        lattice=(300.0, 300.0),
+        options=SolverOptions(dtype=torch.complex128, device=device, memory_mode="memory"),
+    )
+    solver = RCWASolver(config).solve()
+    assert solver.legacy_solver().memory_mode == "memory"
+
+    with pytest.raises(ValueError):
+        SolverOptions(memory_mode="large-workspace")
 
 
 def test_v2_solve_sweep_matches_manual_fixed_geometry_loop():

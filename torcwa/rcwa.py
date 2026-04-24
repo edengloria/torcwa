@@ -10,10 +10,27 @@ pi = 3.141592652589793
 class rcwa:
     _material_conv_cache = OrderedDict()
     _material_conv_cache_max = 32
+    _material_conv_cache_policy = {}
 
     @classmethod
     def clear_material_cache(cls):
         cls._material_conv_cache.clear()
+        cls._material_conv_cache_policy.clear()
+
+    @classmethod
+    def register_material_cache_policy(cls,material,*,cache_key=None,cache=True):
+        if not torch.is_tensor(material):
+            return
+        try:
+            material_ref = weakref.ref(material)
+        except TypeError:
+            return
+        cls._material_conv_cache_policy[id(material)] = (material_ref,cache_key,bool(cache))
+
+    @classmethod
+    def unregister_material_cache_policy(cls,material):
+        if torch.is_tensor(material):
+            cls._material_conv_cache_policy.pop(id(material),None)
 
     # Simulation setting
     def __init__(self,freq,order,L,*,
@@ -53,6 +70,7 @@ class rcwa:
 
         # Stabilize the gradient of eigendecomposition
         self.stable_eig_grad = True if stable_eig_grad else False
+        self.memory_mode = 'balanced'
 
         # Stability setting for inverse matrix of P and Q
         if avoid_Pinv_instability is True:
@@ -655,24 +673,26 @@ class rcwa:
         fixed = torch.as_tensor(fixed,dtype=axis.dtype,device=self._device)
 
         layer_num,zp,zm = self._field_layer_numbers(z_axis)
-        chunk = int(chunk_size) if chunk_size is not None else len(z_axis)
-        chunk = max(1,chunk)
+        z_chunk = self._field_auto_chunk(len(z_axis),chunk_size)
+        axis_chunk = self._field_auto_chunk(len(axis),chunk_size)
 
         electric = [torch.empty([len(axis),len(z_axis)],dtype=self._dtype,device=self._device) for _ in range(3)]
         magnetic = [torch.empty([len(axis),len(z_axis)],dtype=self._dtype,device=self._device) for _ in range(3)]
-        phase = self._field_transverse_phase(plane,axis,fixed)
 
         for layer_value in torch.unique(layer_num):
             layer_id = int(layer_value.item())
             indices = torch.nonzero(layer_num == layer_id,as_tuple=False).reshape([-1])
-            for start in range(0,len(indices),chunk):
-                chunk_indices = indices[start:start+chunk]
+            for start in range(0,len(indices),z_chunk):
+                chunk_indices = indices[start:start+z_chunk]
                 z_sel = z_axis[chunk_indices]
                 z_prop = self._field_z_propagation(layer_id,z_sel,zp,zm)
                 components = self._field_fourier_components(layer_id,z_prop)
-                for ci in range(3):
-                    electric[ci][:,chunk_indices] = torch.matmul(phase,components[ci])
-                    magnetic[ci][:,chunk_indices] = torch.matmul(phase,components[ci+3])
+                for axis_start in range(0,len(axis),axis_chunk):
+                    axis_indices = slice(axis_start,axis_start+axis_chunk)
+                    phase = self._field_transverse_phase(plane,axis[axis_indices],fixed)
+                    for ci in range(3):
+                        electric[ci][axis_indices,chunk_indices] = torch.matmul(phase,components[ci])
+                        magnetic[ci][axis_indices,chunk_indices] = torch.matmul(phase,components[ci+3])
 
         return electric, magnetic
 
@@ -720,13 +740,13 @@ class rcwa:
             if layer_id == -1:
                 eps = self.eps_in if hasattr(self,'eps_in') else 1.
                 mu = self.mu_in if hasattr(self,'mu_in') else 1.
-                V = self.Vi if hasattr(self,'Vi') else self.Vf
+                V = self.__dict__.get('_Vi',self._Vf)
                 Kz_norm_dn = torch.sqrt(eps*mu - Kx_norm_dn**2 - Ky_norm_dn**2)
                 Kz_norm_dn = torch.where(torch.imag(Kz_norm_dn)>0,torch.conj(Kz_norm_dn),Kz_norm_dn).reshape([-1,1])
             else:
                 eps = self.eps_out if hasattr(self,'eps_in') else 1.
                 mu = self.mu_out if hasattr(self,'mu_in') else 1.
-                V = self.Vo if hasattr(self,'Vo') else self.Vf
+                V = self.__dict__.get('_Vo',self._Vf)
                 Kz_norm_dn = torch.sqrt(eps*mu - Kx_norm_dn**2 - Ky_norm_dn**2)
                 Kz_norm_dn = torch.where(torch.imag(Kz_norm_dn)<0,torch.conj(Kz_norm_dn),Kz_norm_dn).reshape([-1,1])
 
@@ -735,24 +755,24 @@ class rcwa:
 
             if layer_id == -1 and self.source_direction == 'forward':
                 Exy_p = self.E_i*z_phase
-                Hxy_p = torch.matmul(V,Exy_p)
+                Hxy_p = self._homogeneous_matmul(V,Exy_p)
                 Exy_m = torch.matmul(self.S[1],self.E_i)*torch.conj(z_phase)
-                Hxy_m = torch.matmul(-V,Exy_m)
+                Hxy_m = -self._homogeneous_matmul(V,Exy_m)
             elif layer_id == -1 and self.source_direction == 'backward':
                 Exy_p = torch.zeros([2*self.order_N,z_phase.shape[-1]],dtype=self._dtype,device=self._device)
                 Hxy_p = torch.zeros_like(Exy_p)
                 Exy_m = torch.matmul(self.S[3],self.E_i)*torch.conj(z_phase)
-                Hxy_m = torch.matmul(-V,Exy_m)
+                Hxy_m = -self._homogeneous_matmul(V,Exy_m)
             elif layer_id == self.layer_N and self.source_direction == 'forward':
                 Exy_p = torch.matmul(self.S[0],self.E_i)*z_phase
-                Hxy_p = torch.matmul(V,Exy_p)
+                Hxy_p = self._homogeneous_matmul(V,Exy_p)
                 Exy_m = torch.zeros_like(Exy_p)
                 Hxy_m = torch.zeros_like(Exy_p)
             elif layer_id == self.layer_N and self.source_direction == 'backward':
                 Exy_p = torch.matmul(self.S[2],self.E_i)*z_phase
-                Hxy_p = torch.matmul(V,Exy_p)
+                Hxy_p = self._homogeneous_matmul(V,Exy_p)
                 Exy_m = self.E_i*torch.conj(z_phase)
-                Hxy_m = torch.matmul(-V,Exy_m)
+                Hxy_m = -self._homogeneous_matmul(V,Exy_m)
             else:
                 raise RuntimeError('Invalid field source direction.')
 
@@ -790,7 +810,7 @@ class rcwa:
         Ex_m = Exy_m[:self.order_N,:,:]
         Ey_m = Exy_m[self.order_N:,:,:]
         Hz_m_rhs = self._dn_pre_multiply(self.Kx_norm_dn,Ey_m.reshape([self.order_N,-1])) - self._dn_pre_multiply(self.Ky_norm_dn,Ex_m.reshape([self.order_N,-1]))
-        Hz_p_flat, Hz_m_flat = solve_left_many(self.mu_conv[layer_id],[Hz_p_rhs,Hz_m_rhs])
+        Hz_p_flat, Hz_m_flat = self._solve_left_many_policy(self.mu_conv[layer_id],[Hz_p_rhs,Hz_m_rhs])
         Hz_p = Hz_p_flat.reshape_as(Ex_p)
         Hz_m = Hz_m_flat.reshape_as(Ex_m)
 
@@ -803,7 +823,7 @@ class rcwa:
         Hx_m = Hxy_m[:self.order_N,:,:]
         Hy_m = Hxy_m[self.order_N:,:,:]
         Ez_m_rhs = self._dn_pre_multiply(self.Ky_norm_dn,Hx_m.reshape([self.order_N,-1])) - self._dn_pre_multiply(self.Kx_norm_dn,Hy_m.reshape([self.order_N,-1]))
-        Ez_p_flat, Ez_m_flat = solve_left_many(self.eps_conv[layer_id],[Ez_p_rhs,Ez_m_rhs])
+        Ez_p_flat, Ez_m_flat = self._solve_left_many_policy(self.eps_conv[layer_id],[Ez_p_rhs,Ez_m_rhs])
         Ez_p = Ez_p_flat.reshape_as(Hx_p)
         Ez_m = Ez_m_flat.reshape_as(Hx_m)
 
@@ -817,6 +837,23 @@ class rcwa:
         Hz_mn = torch.sum(Hz_p*Cp + Hz_m*Cm,dim=1)
 
         return [Ex_mn,Ey_mn,Ez_mn,Hx_mn,Hy_mn,Hz_mn]
+
+    def _field_xy_from_components(self,x_axis,y_axis,components,chunk_size=None):
+        x_chunk = self._field_auto_chunk(len(x_axis),chunk_size)
+        y_chunk = self._field_auto_chunk(len(y_axis),chunk_size)
+        fields = [torch.empty([len(x_axis),len(y_axis)],dtype=self._dtype,device=self._device) for _ in range(6)]
+
+        for x_start in range(0,len(x_axis),x_chunk):
+            x_sel = x_axis[x_start:x_start+x_chunk].reshape([-1,1,1])
+            for y_start in range(0,len(y_axis),y_chunk):
+                y_sel = y_axis[y_start:y_start+y_chunk].reshape([1,-1,1])
+                xy_phase = torch.exp(1.j*self.omega*(self.Kx_norm_dn.reshape([1,1,-1])*x_sel + self.Ky_norm_dn.reshape([1,1,-1])*y_sel))
+                x_slice = slice(x_start,x_start+len(x_sel))
+                y_slice = slice(y_start,y_start+len(y_sel.reshape([-1])))
+                for ci,component in enumerate(components):
+                    fields[ci][x_slice,y_slice] = torch.sum(component.reshape([1,1,-1])*xy_phase,dim=2)
+
+        return fields[:3], fields[3:]
 
     def field_xy(self,layer_num,x_axis,y_axis,z_prop=0.):
         '''
@@ -846,127 +883,18 @@ class rcwa:
         if type(x_axis) != torch.Tensor or type(y_axis) != torch.Tensor:
             warnings.warn('x and y axis must be torch.Tensor type. Return None.',UserWarning)
             return None
-        
-        # [x, y, diffraction order]
-        x_axis = x_axis.reshape([-1,1,1])
-        y_axis = y_axis.reshape([1,-1,1])
 
-        # Input and output layers
-        if layer_num == -1 or layer_num == self.layer_N:
-            Kx_norm_dn, Ky_norm_dn = self.Kx_norm_dn, self.Ky_norm_dn
+        real_dtype = torch.float32 if self._dtype == torch.complex64 else torch.float64
+        x_axis = x_axis.to(device=self._device,dtype=real_dtype).reshape([-1])
+        y_axis = y_axis.to(device=self._device,dtype=real_dtype).reshape([-1])
+        if layer_num == -1:
+            z_prop = z_prop if z_prop <= 0. else 0.
+        elif layer_num == self.layer_N:
+            z_prop = z_prop if z_prop >= 0. else 0.
+        z_axis = torch.as_tensor([z_prop],dtype=real_dtype,device=self._device)
+        components = [component[:,0] for component in self._field_fourier_components(layer_num,z_axis)]
 
-            if layer_num == -1:
-                z_prop = z_prop if z_prop <= 0. else 0.
-                eps = self.eps_in if hasattr(self,'eps_in') else 1.
-                mu = self.mu_in if hasattr(self,'mu_in') else 1.
-                Vi = self.Vi if hasattr(self,'Vi') else self.Vf
-                Kz_norm_dn = torch.sqrt(eps*mu - Kx_norm_dn**2 - Ky_norm_dn**2)
-                Kz_norm_dn = torch.where(torch.imag(Kz_norm_dn)>0,torch.conj(Kz_norm_dn),Kz_norm_dn).reshape([-1,1])
-            elif layer_num == self.layer_N:
-                z_prop = z_prop if z_prop >= 0. else 0.
-                eps = self.eps_out if hasattr(self,'eps_in') else 1.
-                mu = self.mu_out if hasattr(self,'mu_in') else 1.        
-                Vo = self.Vo if hasattr(self,'Vo') else self.Vf
-                Kz_norm_dn = torch.sqrt(eps*mu - Kx_norm_dn**2 - Ky_norm_dn**2)
-                Kz_norm_dn = torch.where(torch.imag(Kz_norm_dn)<0,torch.conj(Kz_norm_dn),Kz_norm_dn).reshape([-1,1])
-
-            # Phase
-            Kz_norm_dn = torch.vstack((Kz_norm_dn,Kz_norm_dn))
-            z_phase = torch.exp(1.j*self.omega*Kz_norm_dn*z_prop)
-            
-            # Fourier domain fields
-            # [diffraction order, diffraction order]
-            if layer_num == -1 and self.source_direction == 'forward':
-                Exy_p = self.E_i*z_phase
-                Hxy_p = torch.matmul(Vi,Exy_p)
-                Exy_m = torch.matmul(self.S[1],self.E_i)*torch.conj(z_phase)
-                Hxy_m = torch.matmul(-Vi,Exy_m)
-            elif layer_num == -1 and self.source_direction == 'backward':
-                Exy_p = torch.zeros_like(self.E_i)
-                Hxy_p = torch.zeros_like(self.E_i)
-                Exy_m = torch.matmul(self.S[3],self.E_i)*torch.conj(z_phase)
-                Hxy_m = torch.matmul(-Vi,Exy_m)
-            elif layer_num == self.layer_N and self.source_direction == 'forward':
-                Exy_p = torch.matmul(self.S[0],self.E_i)*z_phase
-                Hxy_p = torch.matmul(Vo,Exy_p)
-                Exy_m = torch.zeros_like(self.E_i)
-                Hxy_m = torch.zeros_like(self.E_i)
-            elif layer_num == self.layer_N and self.source_direction == 'backward':
-                Exy_p = torch.matmul(self.S[2],self.E_i)*z_phase
-                Hxy_p = torch.matmul(Vo,Exy_p)
-                Exy_m = self.E_i*torch.conj(z_phase)
-                Hxy_m = torch.matmul(-Vo,Exy_m)
-
-            Ex_mn = Exy_p[:self.order_N] + Exy_m[:self.order_N]
-            Ey_mn = Exy_p[self.order_N:] + Exy_m[self.order_N:]
-            Hz_mn = self._dn_pre_multiply(self.Kx_norm_dn,Ey_mn)/mu - self._dn_pre_multiply(self.Ky_norm_dn,Ex_mn)/mu
-            Hx_mn = Hxy_p[:self.order_N] + Hxy_m[:self.order_N]
-            Hy_mn = Hxy_p[self.order_N:] + Hxy_m[self.order_N:]
-            Ez_mn = self._dn_pre_multiply(self.Ky_norm_dn,Hx_mn)/eps - self._dn_pre_multiply(self.Kx_norm_dn,Hy_mn)/eps
-
-            # Spatial domain fields
-            xy_phase = torch.exp(1.j * self.omega * (self.Kx_norm_dn*x_axis + self.Ky_norm_dn*y_axis))
-            Ex = torch.sum(Ex_mn.reshape(1,1,-1)*xy_phase,dim=2)
-            Ey = torch.sum(Ey_mn.reshape(1,1,-1)*xy_phase,dim=2)
-            Ez = torch.sum(Ez_mn.reshape(1,1,-1)*xy_phase,dim=2)
-            Hx = torch.sum(Hx_mn.reshape(1,1,-1)*xy_phase,dim=2)
-            Hy = torch.sum(Hy_mn.reshape(1,1,-1)*xy_phase,dim=2)
-            Hz = torch.sum(Hz_mn.reshape(1,1,-1)*xy_phase,dim=2)
-
-        # Internal layers
-        else:
-            if self.source_direction == 'forward':
-                C = torch.matmul(self.C[0][layer_num],self.E_i)
-            elif self.source_direction == 'backward':
-                C = torch.matmul(self.C[1][layer_num],self.E_i)
-
-            kz_norm = self.kz_norm[layer_num]
-            E_eigvec = self.E_eigvec[layer_num]
-            H_eigvec = self.H_eigvec[layer_num]
-
-            Cp = C[:2*self.order_N,0]
-            Cm = C[2*self.order_N:,0]
-
-            # Phase
-            z_phase_p = torch.exp(1.j*self.omega*kz_norm*z_prop)
-            z_phase_m = torch.exp(1.j*self.omega*kz_norm*(self.thickness[layer_num]-z_prop))
-
-            # Fourier domain fields
-            # [diffraction order, eigenmode number]
-            Exy_p = diag_post_multiply(E_eigvec,z_phase_p)
-            Ex_p = Exy_p[:self.order_N,:]
-            Ey_p = Exy_p[self.order_N:,:]
-            Hz_p = solve_left(self.mu_conv[layer_num],self._dn_pre_multiply(self.Kx_norm_dn,Ey_p) - self._dn_pre_multiply(self.Ky_norm_dn,Ex_p))
-            Exy_m = diag_post_multiply(E_eigvec,z_phase_m)
-            Ex_m = Exy_m[:self.order_N,:]
-            Ey_m = Exy_m[self.order_N:,:]
-            Hz_m = solve_left(self.mu_conv[layer_num],self._dn_pre_multiply(self.Kx_norm_dn,Ey_m) - self._dn_pre_multiply(self.Ky_norm_dn,Ex_m))
-            Hxy_p = diag_post_multiply(H_eigvec,z_phase_p)
-            Hx_p = Hxy_p[:self.order_N,:]
-            Hy_p = Hxy_p[self.order_N:,:]
-            Ez_p = solve_left(self.eps_conv[layer_num],self._dn_pre_multiply(self.Ky_norm_dn,Hx_p) - self._dn_pre_multiply(self.Kx_norm_dn,Hy_p))
-            Hxy_m = diag_post_multiply(-H_eigvec,z_phase_m)
-            Hx_m = Hxy_m[:self.order_N,:]
-            Hy_m = Hxy_m[self.order_N:,:]
-            Ez_m = solve_left(self.eps_conv[layer_num],self._dn_pre_multiply(self.Ky_norm_dn,Hx_m) - self._dn_pre_multiply(self.Kx_norm_dn,Hy_m))
-            
-            Ex_mn = torch.matmul(Ex_p,Cp) + torch.matmul(Ex_m,Cm)
-            Ey_mn = torch.matmul(Ey_p,Cp) + torch.matmul(Ey_m,Cm)
-            Ez_mn = torch.matmul(Ez_p,Cp) + torch.matmul(Ez_m,Cm)
-            Hx_mn = torch.matmul(Hx_p,Cp) + torch.matmul(Hx_m,Cm)
-            Hy_mn = torch.matmul(Hy_p,Cp) + torch.matmul(Hy_m,Cm)
-            Hz_mn = torch.matmul(Hz_p,Cp) + torch.matmul(Hz_m,Cm)
-
-            # Spatial domain fields
-            xy_phase = torch.exp(1.j * self.omega * (self.Kx_norm_dn*x_axis + self.Ky_norm_dn*y_axis))
-            Ex = torch.sum(Ex_mn.reshape(1,1,-1)*xy_phase,dim=2)
-            Ey = torch.sum(Ey_mn.reshape(1,1,-1)*xy_phase,dim=2)
-            Ez = torch.sum(Ez_mn.reshape(1,1,-1)*xy_phase,dim=2)
-            Hx = torch.sum(Hx_mn.reshape(1,1,-1)*xy_phase,dim=2)
-            Hy = torch.sum(Hy_mn.reshape(1,1,-1)*xy_phase,dim=2)
-            Hz = torch.sum(Hz_mn.reshape(1,1,-1)*xy_phase,dim=2)
-
-        return [Ex, Ey, Ez], [Hx, Hy, Hz]
+        return self._field_xy_from_components(x_axis,y_axis,components,chunk_size=getattr(self,'field_chunk_size',None))
 
     # Internal functions
     @property
@@ -977,9 +905,86 @@ class rcwa:
     def Ky_norm(self):
         return torch.diag(self.Ky_norm_dn)
 
+    @property
+    def Vf(self):
+        if '_Vf' not in self.__dict__:
+            raise AttributeError('Vf has not been initialized')
+        return self._homogeneous_dense(self.__dict__['_Vf'])
+
+    @property
+    def Vi(self):
+        if '_Vi' not in self.__dict__:
+            raise AttributeError('Vi has not been initialized')
+        return self._homogeneous_dense(self.__dict__['_Vi'])
+
+    @property
+    def Vo(self):
+        if '_Vo' not in self.__dict__:
+            raise AttributeError('Vo has not been initialized')
+        return self._homogeneous_dense(self.__dict__['_Vo'])
+
     def _dn_pre_multiply(self,diagonal,tensor):
         shape = [diagonal.shape[0]] + [1]*(tensor.dim()-1)
         return diagonal.reshape(shape) * tensor
+
+    def _solve_left_many_policy(self,A,rhs_list):
+        if getattr(self,'memory_mode','balanced') == 'speed':
+            return solve_left_many(A,rhs_list)
+        return [solve_left(A,rhs) for rhs in rhs_list]
+
+    def _field_auto_chunk(self,total,chunk_size=None):
+        if chunk_size is not None:
+            return max(1,int(chunk_size))
+        mode = getattr(self,'memory_mode','balanced')
+        if mode == 'speed':
+            return max(1,int(total))
+        if mode == 'memory':
+            return max(1,min(int(total),16))
+        return max(1,min(int(total),64))
+
+    def _homogeneous_transform(self,kz_norm_dn):
+        kx = self.Kx_norm_dn
+        ky = self.Ky_norm_dn
+        return (
+            -ky*kx/kz_norm_dn,
+            -kz_norm_dn - ky**2/kz_norm_dn,
+            kz_norm_dn + kx**2/kz_norm_dn,
+            kx*ky/kz_norm_dn,
+        )
+
+    def _homogeneous_add(self,left,right,alpha=1):
+        return tuple(l + alpha*r for l,r in zip(left,right))
+
+    def _homogeneous_dense(self,transform):
+        a,b,c,d = transform
+        return torch.hstack((torch.vstack((torch.diag(a),torch.diag(c))),torch.vstack((torch.diag(b),torch.diag(d)))))
+
+    def _homogeneous_matmul(self,transform,matrix):
+        a,b,c,d = transform
+        top = matrix[:self.order_N]
+        bottom = matrix[self.order_N:]
+        return torch.vstack((a.reshape([-1,1])*top + b.reshape([-1,1])*bottom,
+            c.reshape([-1,1])*top + d.reshape([-1,1])*bottom))
+
+    def _homogeneous_solve(self,transform,rhs):
+        a,b,c,d = transform
+        top = rhs[:self.order_N]
+        bottom = rhs[self.order_N:]
+        det = a*d - b*c
+        return torch.vstack(((d.reshape([-1,1])*top - b.reshape([-1,1])*bottom)/det.reshape([-1,1]),
+            (-c.reshape([-1,1])*top + a.reshape([-1,1])*bottom)/det.reshape([-1,1])))
+
+    def _homogeneous_solve_transform_dense(self,left,right):
+        a,b,c,d = left
+        e,f,g,h = right
+        det = a*d - b*c
+        result = (
+            (d*e - b*g)/det,
+            (d*f - b*h)/det,
+            (-c*e + a*g)/det,
+            (-c*f + a*h)/det,
+        )
+        return self._homogeneous_dense(result)
 
     def _matching_indices(self,orders):
         orders[orders[:,0]<-self.order[0],0] = int(-self.order[0])
@@ -1009,21 +1014,19 @@ class rcwa:
 
         Kz_norm_dn = torch.sqrt(1. - self.Kx_norm_dn**2 - self.Ky_norm_dn**2)
         Kz_norm_dn = torch.where(torch.imag(Kz_norm_dn)<0,torch.conj(Kz_norm_dn),Kz_norm_dn)
-        tmp1 = torch.vstack((torch.diag(-self.Ky_norm_dn*self.Kx_norm_dn/Kz_norm_dn), torch.diag(Kz_norm_dn + self.Kx_norm_dn**2/Kz_norm_dn)))
-        tmp2 = torch.vstack((torch.diag(-Kz_norm_dn - self.Ky_norm_dn**2/Kz_norm_dn), torch.diag(self.Kx_norm_dn*self.Ky_norm_dn/Kz_norm_dn)))
-        self.Vf = torch.hstack((tmp1, tmp2))
+        self._Vf = self._homogeneous_transform(Kz_norm_dn)
 
         if hasattr(self,'Sin'):
             # Input layer k-vectors and E to H transformation matrix
             Kz_norm_dn = torch.sqrt(self.eps_in*self.mu_in - self.Kx_norm_dn**2 - self.Ky_norm_dn**2)
             Kz_norm_dn = torch.where(torch.imag(Kz_norm_dn)<0,torch.conj(Kz_norm_dn),Kz_norm_dn)
-            tmp1 = torch.vstack((torch.diag(-self.Ky_norm_dn*self.Kx_norm_dn/Kz_norm_dn), torch.diag(Kz_norm_dn + self.Kx_norm_dn**2/Kz_norm_dn)))
-            tmp2 = torch.vstack((torch.diag(-Kz_norm_dn - self.Ky_norm_dn**2/Kz_norm_dn), torch.diag(self.Kx_norm_dn*self.Ky_norm_dn/Kz_norm_dn)))
-            self.Vi = torch.hstack((tmp1, tmp2))
+            self._Vi = self._homogeneous_transform(Kz_norm_dn)
 
-            Vtmp1 = self.Vf+self.Vi
-            Vtmp2 = self.Vf-self.Vi
-            Vtmp1_Vi, Vtmp1_Vtmp2, Vtmp1_Vf = solve_left_many(Vtmp1,[self.Vi,Vtmp2,self.Vf])
+            Vtmp1 = self._homogeneous_add(self._Vf,self._Vi)
+            Vtmp2 = self._homogeneous_add(self._Vf,self._Vi,alpha=-1)
+            Vtmp1_Vi = self._homogeneous_solve_transform_dense(Vtmp1,self._Vi)
+            Vtmp1_Vtmp2 = self._homogeneous_solve_transform_dense(Vtmp1,Vtmp2)
+            Vtmp1_Vf = self._homogeneous_solve_transform_dense(Vtmp1,self._Vf)
 
             # Input layer S-matrix
             self.Sin.append(2*Vtmp1_Vi)      # Tf S11
@@ -1035,13 +1038,13 @@ class rcwa:
             # Output layer k-vectors and E to H transformation matrix
             Kz_norm_dn = torch.sqrt(self.eps_out*self.mu_out - self.Kx_norm_dn**2 - self.Ky_norm_dn**2)
             Kz_norm_dn = torch.where(torch.imag(Kz_norm_dn)<0,torch.conj(Kz_norm_dn),Kz_norm_dn)
-            tmp1 = torch.vstack((torch.diag(-self.Ky_norm_dn*self.Kx_norm_dn/Kz_norm_dn), torch.diag(Kz_norm_dn + self.Kx_norm_dn**2/Kz_norm_dn)))
-            tmp2 = torch.vstack((torch.diag(-Kz_norm_dn - self.Ky_norm_dn**2/Kz_norm_dn), torch.diag(self.Kx_norm_dn*self.Ky_norm_dn/Kz_norm_dn)))
-            self.Vo = torch.hstack((tmp1, tmp2))
+            self._Vo = self._homogeneous_transform(Kz_norm_dn)
 
-            Vtmp1 = self.Vf+self.Vo
-            Vtmp2 = self.Vf-self.Vo
-            Vtmp1_Vf, Vtmp1_Vtmp2, Vtmp1_Vo = solve_left_many(Vtmp1,[self.Vf,Vtmp2,self.Vo])
+            Vtmp1 = self._homogeneous_add(self._Vf,self._Vo)
+            Vtmp2 = self._homogeneous_add(self._Vf,self._Vo,alpha=-1)
+            Vtmp1_Vf = self._homogeneous_solve_transform_dense(Vtmp1,self._Vf)
+            Vtmp1_Vtmp2 = self._homogeneous_solve_transform_dense(Vtmp1,Vtmp2)
+            Vtmp1_Vo = self._homogeneous_solve_transform_dense(Vtmp1,self._Vo)
 
             # Output layer S-matrix
             self.Sout.append(2*Vtmp1_Vf)      # Tf S11
@@ -1091,11 +1094,29 @@ class rcwa:
     def _material_conv_cache_key(self,material):
         if not torch.is_tensor(material) or material.requires_grad:
             return None,None
+        user_cache_key = None
+        policy = self._material_conv_cache_policy.get(id(material))
+        if policy is not None:
+            material_ref,policy_cache_key,cache_enabled = policy
+            if material_ref() is material:
+                if not cache_enabled:
+                    return None,None
+                user_cache_key = policy_cache_key
+            else:
+                del self._material_conv_cache_policy[id(material)]
         try:
             material_ref = weakref.ref(material)
         except TypeError:
             return None,None
+        if user_cache_key is not None:
+            try:
+                hash(user_cache_key)
+            except TypeError:
+                user_cache_key = repr(user_cache_key)
+        is_conj = material.is_conj() if hasattr(material,'is_conj') else False
+        is_neg = material.is_neg() if hasattr(material,'is_neg') else False
         key = (
+            user_cache_key,
             id(material),
             material.data_ptr(),
             getattr(material,'_version',0),
@@ -1104,7 +1125,14 @@ class rcwa:
             int(material.storage_offset()),
             str(material.dtype),
             str(material.device),
+            material.device.index if material.device.type != 'cpu' else None,
+            str(material.layout),
+            bool(is_conj),
+            bool(is_neg),
+            bool(material.requires_grad),
             tuple(int(v) for v in self.order),
+            len(self.order_x),
+            len(self.order_y),
         )
         return key,material_ref
     
@@ -1193,23 +1221,28 @@ class rcwa:
         else:
             self.H_eigvec.append(lu_solve_left(P_lu,P_pivots,E_kz))
 
-        Vf_lu, Vf_pivots = lu_factor_left(self.Vf)
-        Vf_inv_H = lu_solve_left(Vf_lu,Vf_pivots,self.H_eigvec[-1])
+        Vf_inv_H = self._homogeneous_solve(self._Vf,self.H_eigvec[-1])
         E_plus = self.E_eigvec[-1] + Vf_inv_H
         E_minus = self.E_eigvec[-1] - Vf_inv_H
         E_minus_phase = diag_post_multiply(E_minus,phase)
         E_phase = diag_post_multiply(self.E_eigvec[-1],phase)
 
-        Ctmp1 = torch.vstack((E_plus, E_minus_phase))
-        Ctmp2 = torch.vstack((E_minus_phase, E_plus))
-        Ctmp = torch.hstack((Ctmp1,Ctmp2))
-
-        # Mode coupling coefficients
-        Cf_rhs = torch.vstack((2*torch.eye(2*self.order_N,dtype=self._dtype,device=self._device),
-            torch.zeros([2*self.order_N,2*self.order_N],dtype=self._dtype,device=self._device)))
-        Cb_rhs = torch.vstack((torch.zeros([2*self.order_N,2*self.order_N],dtype=self._dtype,device=self._device),
-            2*torch.eye(2*self.order_N,dtype=self._dtype,device=self._device)))
-        Cf, Cb = solve_left_many(Ctmp,[Cf_rhs,Cb_rhs])
+        # Mode coupling coefficients.  The coupling matrix has the exact
+        # block-symmetric form [[A, B], [B, A]], so diagonalizing that block
+        # structure avoids the larger 4M x 4M solve in balanced/memory modes.
+        eye = torch.eye(2*self.order_N,dtype=self._dtype,device=self._device)
+        if getattr(self,'memory_mode','balanced') == 'speed':
+            Ctmp1 = torch.vstack((E_plus, E_minus_phase))
+            Ctmp2 = torch.vstack((E_minus_phase, E_plus))
+            Ctmp = torch.hstack((Ctmp1,Ctmp2))
+            Cf_rhs = torch.vstack((2*eye,torch.zeros_like(eye)))
+            Cb_rhs = torch.vstack((torch.zeros_like(eye),2*eye))
+            Cf, Cb = solve_left_many(Ctmp,[Cf_rhs,Cb_rhs])
+        else:
+            U = solve_left(E_plus + E_minus_phase,eye)
+            V = solve_left(E_plus - E_minus_phase,eye)
+            Cf = torch.vstack((U + V,U - V))
+            Cb = torch.vstack((U - V,U + V))
         self.Cf.append(Cf)
         self.Cb.append(Cb)
 
@@ -1227,8 +1260,8 @@ class rcwa:
         eye = torch.eye(2*self.order_N,dtype=self._dtype,device=self._device)
         tmp1_matrix = eye - torch.matmul(Sm[2],Sn[1])
         tmp2_matrix = eye - torch.matmul(Sn[1],Sm[2])
-        tmp1_Sm0, tmp1_Sm2Sn3 = solve_left_many(tmp1_matrix,[Sm[0],torch.matmul(Sm[2],Sn[3])])
-        tmp2_Sn1Sm0, tmp2_Sn3 = solve_left_many(tmp2_matrix,[torch.matmul(Sn[1],Sm[0]),Sn[3]])
+        tmp1_Sm0, tmp1_Sm2Sn3 = self._solve_left_many_policy(tmp1_matrix,[Sm[0],torch.matmul(Sm[2],Sn[3])])
+        tmp2_Sn1Sm0, tmp2_Sn3 = self._solve_left_many_policy(tmp2_matrix,[torch.matmul(Sn[1],Sm[0]),Sn[3]])
 
         # Layer S-matrix
         S11 = torch.matmul(Sn[0],tmp1_Sm0)

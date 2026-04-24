@@ -162,6 +162,7 @@ class RCWASolver:
             avoid_Pinv_instability=options.avoid_pinv_instability,
             max_Pinv_instability=options.max_pinv_instability,
         )
+        sim.memory_mode = options.memory_mode
         if cfg.input_layer.eps != 1.0 or cfg.input_layer.mu != 1.0:
             sim.add_input_layer(eps=cfg.input_layer.eps, mu=cfg.input_layer.mu)
         if cfg.output_layer.eps != 1.0 or cfg.output_layer.mu != 1.0:
@@ -174,14 +175,22 @@ class RCWASolver:
             angle_layer=angle_ref.angle_layer,
         )
         for layer in self.layers:
-            sim.add_layer(thickness=layer.thickness, eps=self._material_value(layer.eps), mu=self._material_value(layer.mu))
+            eps = self._material_value(layer.eps, sim)
+            mu = self._material_value(layer.mu, sim)
+            try:
+                sim.add_layer(thickness=layer.thickness, eps=eps, mu=mu)
+            finally:
+                sim.unregister_material_cache_policy(eps)
+                sim.unregister_material_cache_policy(mu)
         self._legacy = sim
         return sim
 
     @staticmethod
-    def _material_value(value):
+    def _material_value(value, sim=None):
         if isinstance(value, MaterialGrid):
-            return value.values if value.cache else value.values.clone()
+            if sim is not None:
+                sim.register_material_cache_policy(value.values, cache_key=value.cache_key, cache=value.cache)
+            return value.values
         return value
 
     @staticmethod
