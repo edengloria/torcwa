@@ -80,10 +80,19 @@ def test_v2_facade_matches_legacy_for_patterned_layer_and_fields():
     x_axis = torch.linspace(0.0, lattice[0], 8)
     z_axis = torch.linspace(-10.0, 90.0, 5)
     electric, magnetic = v2.field_plane(plane="xz", axis0=x_axis, axis1=z_axis, offset=lattice[1] / 2)
+    electric_chunked, magnetic_chunked = v2.field_plane(plane="xz", axis0=x_axis, axis1=z_axis, offset=lattice[1] / 2, chunk_size=2)
 
     assert [tuple(component.shape) for component in electric] == [(8, 5), (8, 5), (8, 5)]
     assert [tuple(component.shape) for component in magnetic] == [(8, 5), (8, 5), (8, 5)]
+    assert torch.allclose(electric_chunked[0], electric[0])
+    assert torch.allclose(magnetic_chunked[0], magnetic[0])
     assert torch.isfinite(torch.real(electric[0])).all()
+
+    y_axis = torch.linspace(0.0, lattice[1], 7)
+    yz_electric, yz_magnetic = v2.field_plane(plane="yz", axis0=y_axis, axis1=z_axis, offset=lattice[0] / 2, chunk_size=2)
+    assert [tuple(component.shape) for component in yz_electric] == [(7, 5), (7, 5), (7, 5)]
+    assert [tuple(component.shape) for component in yz_magnetic] == [(7, 5), (7, 5), (7, 5)]
+    assert torch.isfinite(torch.real(yz_electric[0])).all()
 
 
 def test_small_geometry_gradient_is_finite():

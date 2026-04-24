@@ -613,168 +613,12 @@ class rcwa:
             Return
             - [Ex, Ey, Ez] (list[torch.Tensor]), [Hx, Hy, Hz] (list[torch.Tensor])
         '''
-            
+
         if type(x_axis) != torch.Tensor or type(z_axis) != torch.Tensor:
             warnings.warn('x and z axis must be torch.Tensor type. Return None.',UserWarning)
             return None
 
-        x_axis = x_axis.reshape([-1,1,1])
-
-        Kx_norm, Ky_norm = self.Kx_norm, self.Ky_norm
-
-        Ex_split, Ey_split, Ez_split = [], [], []
-        Hx_split, Hy_split, Hz_split = [], [], []
-
-        # layer number
-        zp = torch.zeros(len(self.thickness),device=self._device)
-        zm = torch.zeros(len(self.thickness),device=self._device)
-        layer_num = torch.zeros([len(z_axis)],dtype=torch.int64,device=self._device)
-        layer_num[z_axis<0.] = -1
-
-        for ti in range(len(self.thickness)):
-            zp[ti:] += self.thickness[ti]
-        zm[1:] = zp[0:-1]
-
-        for bi in range(len(zp)):
-            layer_num[z_axis>zp[bi]] += 1
-
-        prev_layer_num = -2
-        for zi in range(len(z_axis)):
-            # Input and output layers
-            if layer_num[zi] == -1 or layer_num[zi] == self.layer_N:
-                Kx_norm_dn = self.Kx_norm_dn
-                Ky_norm_dn = self.Ky_norm_dn
-
-                if layer_num[zi] == -1:
-                    z_prop = z_axis[zi] if z_axis[zi] <= 0. else 0.
-                    if layer_num[zi] != prev_layer_num:
-                        eps = self.eps_in if hasattr(self,'eps_in') else 1.
-                        mu = self.mu_in if hasattr(self,'mu_in') else 1.
-                        Vi = self.Vi if hasattr(self,'Vi') else self.Vf
-                        Kz_norm_dn = torch.sqrt(eps*mu - Kx_norm_dn**2 - Ky_norm_dn**2)
-                        Kz_norm_dn = torch.where(torch.imag(Kz_norm_dn)>0,torch.conj(Kz_norm_dn),Kz_norm_dn).reshape([-1,1])
-                        Kz_norm_dn = torch.vstack((Kz_norm_dn,Kz_norm_dn))
-                elif layer_num[zi] == self.layer_N:
-                    if len(zp) == 0:
-                        z_prop = z_axis[zi]
-                    else:
-                        z_prop = z_axis[zi]-zp[-1] if z_axis[zi]-zp[-1] >= 0. else 0.
-                    if layer_num[zi] != prev_layer_num:
-                        eps = self.eps_out if hasattr(self,'eps_in') else 1.
-                        mu = self.mu_out if hasattr(self,'mu_in') else 1.        
-                        Vo = self.Vo if hasattr(self,'Vo') else self.Vf
-                        Kz_norm_dn = torch.sqrt(eps*mu - Kx_norm_dn**2 - Ky_norm_dn**2)
-                        Kz_norm_dn = torch.where(torch.imag(Kz_norm_dn)<0,torch.conj(Kz_norm_dn),Kz_norm_dn).reshape([-1,1])
-                        Kz_norm_dn = torch.vstack((Kz_norm_dn,Kz_norm_dn))
-
-                # Phase
-                z_phase = torch.exp(1.j*self.omega*Kz_norm_dn*z_prop)
-
-                # Fourier domain fields
-                # [diffraction order]
-                if layer_num[zi] == -1 and self.source_direction == 'forward':
-                    Exy_p = self.E_i*z_phase
-                    Hxy_p = torch.matmul(Vi,Exy_p)
-                    Exy_m = torch.matmul(self.S[1],self.E_i)*torch.conj(z_phase)
-                    Hxy_m = torch.matmul(-Vi,Exy_m)
-                elif layer_num[zi] == -1 and self.source_direction == 'backward':
-                    Exy_p = torch.zeros_like(self.E_i)
-                    Hxy_p = torch.zeros_like(self.E_i)
-                    Exy_m = torch.matmul(self.S[3],self.E_i)*torch.conj(z_phase)
-                    Hxy_m = torch.matmul(-Vi,Exy_m)
-                elif layer_num[zi] == self.layer_N and self.source_direction == 'forward':
-                    Exy_p = torch.matmul(self.S[0],self.E_i)*z_phase
-                    Hxy_p = torch.matmul(Vo,Exy_p)
-                    Exy_m = torch.zeros_like(self.E_i)
-                    Hxy_m = torch.zeros_like(self.E_i)
-                elif layer_num[zi] == self.layer_N and self.source_direction == 'backward':
-                    Exy_p = torch.matmul(self.S[2],self.E_i)*z_phase
-                    Hxy_p = torch.matmul(Vo,Exy_p)
-                    Exy_m = self.E_i*torch.conj(z_phase)
-                    Hxy_m = torch.matmul(-Vo,Exy_m)
-
-                Ex_mn = Exy_p[:self.order_N] + Exy_m[:self.order_N]
-                Ey_mn = Exy_p[self.order_N:] + Exy_m[self.order_N:]
-                Hz_mn = torch.matmul(Kx_norm,Ey_mn)/mu - torch.matmul(Ky_norm,Ex_mn)/mu
-                Hx_mn = Hxy_p[:self.order_N] + Hxy_m[:self.order_N]
-                Hy_mn = Hxy_p[self.order_N:] + Hxy_m[self.order_N:]
-                Ez_mn = torch.matmul(Ky_norm,Hx_mn)/eps - torch.matmul(Kx_norm,Hy_mn)/eps
-
-                # Spatial domain fields
-                xy_phase = torch.exp(1.j * self.omega * (self.Kx_norm_dn*x_axis + self.Ky_norm_dn*y))
-                Ex_split.append(torch.sum(Ex_mn.reshape(1,1,-1)*xy_phase,dim=2))
-                Ey_split.append(torch.sum(Ey_mn.reshape(1,1,-1)*xy_phase,dim=2))
-                Ez_split.append(torch.sum(Ez_mn.reshape(1,1,-1)*xy_phase,dim=2))
-                Hx_split.append(torch.sum(Hx_mn.reshape(1,1,-1)*xy_phase,dim=2))
-                Hy_split.append(torch.sum(Hy_mn.reshape(1,1,-1)*xy_phase,dim=2))
-                Hz_split.append(torch.sum(Hz_mn.reshape(1,1,-1)*xy_phase,dim=2))
-
-            # Internal layers
-            else:
-                z_prop = z_axis[zi] - zm[layer_num[zi]]
-                
-                if layer_num[zi] != prev_layer_num:
-                    if self.source_direction == 'forward':
-                        C = torch.matmul(self.C[0][layer_num[zi]],self.E_i)
-                    elif self.source_direction == 'backward':
-                        C = torch.matmul(self.C[1][layer_num[zi]],self.E_i)
-
-                    kz_norm = self.kz_norm[layer_num[zi]]
-                    E_eigvec = self.E_eigvec[layer_num[zi]]
-                    H_eigvec = self.H_eigvec[layer_num[zi]]
-
-                    Cp = C[:2*self.order_N,0]
-                    Cm = C[2*self.order_N:,0]
-
-                # Phase
-                z_phase_p = torch.exp(1.j*self.omega*kz_norm*z_prop)
-                z_phase_m = torch.exp(1.j*self.omega*kz_norm*(self.thickness[layer_num[zi]]-z_prop))
-
-                # Fourier domain fields
-                # [diffraction order, eigenmode number]
-                Exy_p = diag_post_multiply(E_eigvec,z_phase_p)
-                Ex_p = Exy_p[:self.order_N,:]
-                Ey_p = Exy_p[self.order_N:,:]
-                Hz_p = solve_left(self.mu_conv[layer_num[zi]],torch.matmul(Kx_norm,Ey_p) - torch.matmul(Ky_norm,Ex_p))
-                Exy_m = diag_post_multiply(E_eigvec,z_phase_m)
-                Ex_m = Exy_m[:self.order_N,:]
-                Ey_m = Exy_m[self.order_N:,:]
-                Hz_m = solve_left(self.mu_conv[layer_num[zi]],torch.matmul(Kx_norm,Ey_m) - torch.matmul(Ky_norm,Ex_m))
-                Hxy_p = diag_post_multiply(H_eigvec,z_phase_p)
-                Hx_p = Hxy_p[:self.order_N,:]
-                Hy_p = Hxy_p[self.order_N:,:]
-                Ez_p = solve_left(self.eps_conv[layer_num[zi]],torch.matmul(Ky_norm,Hx_p) - torch.matmul(Kx_norm,Hy_p))
-                Hxy_m = diag_post_multiply(-H_eigvec,z_phase_m)
-                Hx_m = Hxy_m[:self.order_N,:]
-                Hy_m = Hxy_m[self.order_N:,:]
-                Ez_m = solve_left(self.eps_conv[layer_num[zi]],torch.matmul(Ky_norm,Hx_m) - torch.matmul(Kx_norm,Hy_m))
-                
-                Ex_mn = torch.matmul(Ex_p,Cp) + torch.matmul(Ex_m,Cm)
-                Ey_mn = torch.matmul(Ey_p,Cp) + torch.matmul(Ey_m,Cm)
-                Ez_mn = torch.matmul(Ez_p,Cp) + torch.matmul(Ez_m,Cm)
-                Hx_mn = torch.matmul(Hx_p,Cp) + torch.matmul(Hx_m,Cm)
-                Hy_mn = torch.matmul(Hy_p,Cp) + torch.matmul(Hy_m,Cm)
-                Hz_mn = torch.matmul(Hz_p,Cp) + torch.matmul(Hz_m,Cm)
-
-                # Spatial domain fields
-                xy_phase = torch.exp(1.j * self.omega * (self.Kx_norm_dn*x_axis + self.Ky_norm_dn*y))
-                Ex_split.append(torch.sum(Ex_mn.reshape(1,1,-1)*xy_phase,dim=2))
-                Ey_split.append(torch.sum(Ey_mn.reshape(1,1,-1)*xy_phase,dim=2))
-                Ez_split.append(torch.sum(Ez_mn.reshape(1,1,-1)*xy_phase,dim=2))
-                Hx_split.append(torch.sum(Hx_mn.reshape(1,1,-1)*xy_phase,dim=2))
-                Hy_split.append(torch.sum(Hy_mn.reshape(1,1,-1)*xy_phase,dim=2))
-                Hz_split.append(torch.sum(Hz_mn.reshape(1,1,-1)*xy_phase,dim=2))
-
-            prev_layer_num = layer_num[zi]
-
-        Ex = torch.cat(Ex_split,dim=1)
-        Ey = torch.cat(Ey_split,dim=1)
-        Ez = torch.cat(Ez_split,dim=1)
-        Hx = torch.cat(Hx_split,dim=1)
-        Hy = torch.cat(Hy_split,dim=1)
-        Hz = torch.cat(Hz_split,dim=1)
-
-        return [Ex, Ey, Ez], [Hx, Hy, Hz]
+        return self._field_xz_yz('xz',x_axis.reshape([-1]),z_axis.reshape([-1]),y,chunk_size=getattr(self,'field_chunk_size',None))
     
     def field_yz(self,y_axis,z_axis,x):
         '''
@@ -794,14 +638,36 @@ class rcwa:
             warnings.warn('y and z axis must be torch.Tensor type. Return None.',UserWarning)
             return None
 
-        y_axis = y_axis.reshape([-1,1,1])
+        return self._field_xz_yz('yz',y_axis.reshape([-1]),z_axis.reshape([-1]),x,chunk_size=getattr(self,'field_chunk_size',None))
 
-        Kx_norm, Ky_norm = self.Kx_norm, self.Ky_norm
+    def _field_xz_yz(self,plane,axis,z_axis,fixed,chunk_size=None):
+        axis = axis.to(device=self._device)
+        z_axis = z_axis.to(device=self._device)
+        fixed = torch.as_tensor(fixed,dtype=axis.dtype,device=self._device)
 
-        Ex_split, Ey_split, Ez_split = [], [], []
-        Hx_split, Hy_split, Hz_split = [], [], []
+        layer_num,zp,zm = self._field_layer_numbers(z_axis)
+        chunk = int(chunk_size) if chunk_size is not None else len(z_axis)
+        chunk = max(1,chunk)
 
-        # layer number
+        electric = [torch.empty([len(axis),len(z_axis)],dtype=self._dtype,device=self._device) for _ in range(3)]
+        magnetic = [torch.empty([len(axis),len(z_axis)],dtype=self._dtype,device=self._device) for _ in range(3)]
+        phase = self._field_transverse_phase(plane,axis,fixed)
+
+        for layer_value in torch.unique(layer_num):
+            layer_id = int(layer_value.item())
+            indices = torch.nonzero(layer_num == layer_id,as_tuple=False).reshape([-1])
+            for start in range(0,len(indices),chunk):
+                chunk_indices = indices[start:start+chunk]
+                z_sel = z_axis[chunk_indices]
+                z_prop = self._field_z_propagation(layer_id,z_sel,zp,zm)
+                components = self._field_fourier_components(layer_id,z_prop)
+                for ci in range(3):
+                    electric[ci][:,chunk_indices] = torch.matmul(phase,components[ci])
+                    magnetic[ci][:,chunk_indices] = torch.matmul(phase,components[ci+3])
+
+        return electric, magnetic
+
+    def _field_layer_numbers(self,z_axis):
         zp = torch.zeros(len(self.thickness),device=self._device)
         zm = torch.zeros(len(self.thickness),device=self._device)
         layer_num = torch.zeros([len(z_axis)],dtype=torch.int64,device=self._device)
@@ -809,151 +675,138 @@ class rcwa:
 
         for ti in range(len(self.thickness)):
             zp[ti:] += self.thickness[ti]
+        zm[1:] = zp[0:-1]
 
         for bi in range(len(zp)):
             layer_num[z_axis>zp[bi]] += 1
-        zm[1:] = zp[0:-1]
 
-        prev_layer_num = -2
-        for zi in range(len(z_axis)):
-            # Input and output layers
-            if layer_num[zi] == -1 or layer_num[zi] == self.layer_N:
-                Kx_norm_dn = self.Kx_norm_dn
-                Ky_norm_dn = self.Ky_norm_dn
+        return layer_num,zp,zm
 
-                if layer_num[zi] == -1:
-                    z_prop = z_axis[zi] if z_axis[zi] <= 0. else 0.
-                    if layer_num[zi] != prev_layer_num:
-                        eps = self.eps_in if hasattr(self,'eps_in') else 1.
-                        mu = self.mu_in if hasattr(self,'mu_in') else 1.
-                        Vi = self.Vi if hasattr(self,'Vi') else self.Vf
-                        Kz_norm_dn = torch.sqrt(eps*mu - Kx_norm_dn**2 - Ky_norm_dn**2)
-                        Kz_norm_dn = torch.where(torch.imag(Kz_norm_dn)>0,torch.conj(Kz_norm_dn),Kz_norm_dn).reshape([-1,1])
-                        Kz_norm_dn = torch.vstack((Kz_norm_dn,Kz_norm_dn))
-                elif layer_num[zi] == self.layer_N:
-                    if len(zp) == 0:
-                        z_prop = z_axis[zi]
-                    else:
-                        z_prop = z_axis[zi]-zp[-1] if z_axis[zi]-zp[-1] >= 0. else 0.
-                    if layer_num[zi] != prev_layer_num:
-                        eps = self.eps_out if hasattr(self,'eps_in') else 1.
-                        mu = self.mu_out if hasattr(self,'mu_in') else 1.        
-                        Vo = self.Vo if hasattr(self,'Vo') else self.Vf
-                        Kz_norm_dn = torch.sqrt(eps*mu - Kx_norm_dn**2 - Ky_norm_dn**2)
-                        Kz_norm_dn = torch.where(torch.imag(Kz_norm_dn)<0,torch.conj(Kz_norm_dn),Kz_norm_dn).reshape([-1,1])
-                        Kz_norm_dn = torch.vstack((Kz_norm_dn,Kz_norm_dn))
+    def _field_z_propagation(self,layer_id,z_axis,zp,zm):
+        if layer_id == -1:
+            return torch.minimum(z_axis,torch.zeros_like(z_axis))
+        if layer_id == self.layer_N:
+            if len(zp) == 0:
+                return z_axis
+            return torch.maximum(z_axis-zp[-1],torch.zeros_like(z_axis))
+        return z_axis - zm[layer_id]
 
-                # Phase
-                z_phase = torch.exp(1.j*self.omega*Kz_norm_dn*z_prop)
-                
-                # Fourier domain fields
-                # [diffraction order]
-                if layer_num[zi] == -1 and self.source_direction == 'forward':
-                    Exy_p = self.E_i*z_phase
-                    Hxy_p = torch.matmul(Vi,Exy_p)
-                    Exy_m = torch.matmul(self.S[1],self.E_i)*torch.conj(z_phase)
-                    Hxy_m = torch.matmul(-Vi,Exy_m)
-                elif layer_num[zi] == -1 and self.source_direction == 'backward':
-                    Exy_p = torch.zeros_like(self.E_i)
-                    Hxy_p = torch.zeros_like(self.E_i)
-                    Exy_m = torch.matmul(self.S[3],self.E_i)*torch.conj(z_phase)
-                    Hxy_m = torch.matmul(-Vi,Exy_m)
-                elif layer_num[zi] == self.layer_N and self.source_direction == 'forward':
-                    Exy_p = torch.matmul(self.S[0],self.E_i)*z_phase
-                    Hxy_p = torch.matmul(Vo,Exy_p)
-                    Exy_m = torch.zeros_like(self.E_i)
-                    Hxy_m = torch.zeros_like(self.E_i)
-                elif layer_num[zi] == self.layer_N and self.source_direction == 'backward':
-                    Exy_p = torch.matmul(self.S[2],self.E_i)*z_phase
-                    Hxy_p = torch.matmul(Vo,Exy_p)
-                    Exy_m = self.E_i*torch.conj(z_phase)
-                    Hxy_m = torch.matmul(-Vo,Exy_m)
+    def _field_transverse_phase(self,plane,axis,fixed):
+        axis = axis.reshape([-1,1])
+        if plane == 'xz':
+            phase_arg = self.Kx_norm_dn.reshape([1,-1])*axis + self.Ky_norm_dn.reshape([1,-1])*fixed
+        elif plane == 'yz':
+            phase_arg = self.Kx_norm_dn.reshape([1,-1])*fixed + self.Ky_norm_dn.reshape([1,-1])*axis
+        else:
+            raise ValueError("plane must be 'xz' or 'yz'")
+        return torch.exp(1.j*self.omega*phase_arg)
 
-                Ex_mn = Exy_p[:self.order_N] + Exy_m[:self.order_N]
-                Ey_mn = Exy_p[self.order_N:] + Exy_m[self.order_N:]
-                Hz_mn = torch.matmul(Kx_norm,Ey_mn)/mu - torch.matmul(Ky_norm,Ex_mn)/mu
-                Hx_mn = Hxy_p[:self.order_N] + Hxy_m[:self.order_N]
-                Hy_mn = Hxy_p[self.order_N:] + Hxy_m[self.order_N:]
-                Ez_mn = torch.matmul(Ky_norm,Hx_mn)/eps - torch.matmul(Kx_norm,Hy_mn)/eps
+    def _field_fourier_components(self,layer_id,z_prop):
+        Kx_norm, Ky_norm = self.Kx_norm, self.Ky_norm
+        z_prop = z_prop.reshape([1,-1])
 
-                # Spatial domain fields
-                xy_phase = torch.exp(1.j * self.omega * (self.Kx_norm_dn*x + self.Ky_norm_dn*y_axis))
-                Ex_split.append(torch.sum(Ex_mn.reshape(1,1,-1)*xy_phase,dim=2))
-                Ey_split.append(torch.sum(Ey_mn.reshape(1,1,-1)*xy_phase,dim=2))
-                Ez_split.append(torch.sum(Ez_mn.reshape(1,1,-1)*xy_phase,dim=2))
-                Hx_split.append(torch.sum(Hx_mn.reshape(1,1,-1)*xy_phase,dim=2))
-                Hy_split.append(torch.sum(Hy_mn.reshape(1,1,-1)*xy_phase,dim=2))
-                Hz_split.append(torch.sum(Hz_mn.reshape(1,1,-1)*xy_phase,dim=2))
+        if layer_id == -1 or layer_id == self.layer_N:
+            Kx_norm_dn = self.Kx_norm_dn
+            Ky_norm_dn = self.Ky_norm_dn
 
-            # Internal layers
+            if layer_id == -1:
+                eps = self.eps_in if hasattr(self,'eps_in') else 1.
+                mu = self.mu_in if hasattr(self,'mu_in') else 1.
+                V = self.Vi if hasattr(self,'Vi') else self.Vf
+                Kz_norm_dn = torch.sqrt(eps*mu - Kx_norm_dn**2 - Ky_norm_dn**2)
+                Kz_norm_dn = torch.where(torch.imag(Kz_norm_dn)>0,torch.conj(Kz_norm_dn),Kz_norm_dn).reshape([-1,1])
             else:
-                if layer_num[zi] > 0:
-                    z_prop = z_axis[zi] - zp[layer_num[zi]-1]
-                else:
-                    z_prop = z_axis[zi]
-                
-                if layer_num[zi] != prev_layer_num:
-                    if self.source_direction == 'forward':
-                        C = torch.matmul(self.C[0][layer_num[zi]],self.E_i)
-                    elif self.source_direction == 'backward':
-                        C = torch.matmul(self.C[1][layer_num[zi]],self.E_i)
+                eps = self.eps_out if hasattr(self,'eps_in') else 1.
+                mu = self.mu_out if hasattr(self,'mu_in') else 1.
+                V = self.Vo if hasattr(self,'Vo') else self.Vf
+                Kz_norm_dn = torch.sqrt(eps*mu - Kx_norm_dn**2 - Ky_norm_dn**2)
+                Kz_norm_dn = torch.where(torch.imag(Kz_norm_dn)<0,torch.conj(Kz_norm_dn),Kz_norm_dn).reshape([-1,1])
 
-                    kz_norm = self.kz_norm[layer_num[zi]]
-                    E_eigvec = self.E_eigvec[layer_num[zi]]
-                    H_eigvec = self.H_eigvec[layer_num[zi]]
+            Kz_norm_dn = torch.vstack((Kz_norm_dn,Kz_norm_dn))
+            z_phase = torch.exp(1.j*self.omega*Kz_norm_dn*z_prop)
 
-                    Cp = C[:2*self.order_N,0]
-                    Cm = C[2*self.order_N:,0]
+            if layer_id == -1 and self.source_direction == 'forward':
+                Exy_p = self.E_i*z_phase
+                Hxy_p = torch.matmul(V,Exy_p)
+                Exy_m = torch.matmul(self.S[1],self.E_i)*torch.conj(z_phase)
+                Hxy_m = torch.matmul(-V,Exy_m)
+            elif layer_id == -1 and self.source_direction == 'backward':
+                Exy_p = torch.zeros([2*self.order_N,z_phase.shape[-1]],dtype=self._dtype,device=self._device)
+                Hxy_p = torch.zeros_like(Exy_p)
+                Exy_m = torch.matmul(self.S[3],self.E_i)*torch.conj(z_phase)
+                Hxy_m = torch.matmul(-V,Exy_m)
+            elif layer_id == self.layer_N and self.source_direction == 'forward':
+                Exy_p = torch.matmul(self.S[0],self.E_i)*z_phase
+                Hxy_p = torch.matmul(V,Exy_p)
+                Exy_m = torch.zeros_like(Exy_p)
+                Hxy_m = torch.zeros_like(Exy_p)
+            elif layer_id == self.layer_N and self.source_direction == 'backward':
+                Exy_p = torch.matmul(self.S[2],self.E_i)*z_phase
+                Hxy_p = torch.matmul(V,Exy_p)
+                Exy_m = self.E_i*torch.conj(z_phase)
+                Hxy_m = torch.matmul(-V,Exy_m)
+            else:
+                raise RuntimeError('Invalid field source direction.')
 
-                # Phase
-                z_phase_p = torch.exp(1.j*self.omega*kz_norm*z_prop)
-                z_phase_m = torch.exp(1.j*self.omega*kz_norm*(self.thickness[layer_num[zi]]-z_prop))
+            Ex_mn = Exy_p[:self.order_N] + Exy_m[:self.order_N]
+            Ey_mn = Exy_p[self.order_N:] + Exy_m[self.order_N:]
+            Hz_mn = torch.matmul(Kx_norm,Ey_mn)/mu - torch.matmul(Ky_norm,Ex_mn)/mu
+            Hx_mn = Hxy_p[:self.order_N] + Hxy_m[:self.order_N]
+            Hy_mn = Hxy_p[self.order_N:] + Hxy_m[self.order_N:]
+            Ez_mn = torch.matmul(Ky_norm,Hx_mn)/eps - torch.matmul(Kx_norm,Hy_mn)/eps
 
-                # Fourier domain fields
-                # [diffraction order, eigenmode number]
-                Exy_p = diag_post_multiply(E_eigvec,z_phase_p)
-                Ex_p = Exy_p[:self.order_N,:]
-                Ey_p = Exy_p[self.order_N:,:]
-                Hz_p = solve_left(self.mu_conv[layer_num[zi]],torch.matmul(Kx_norm,Ey_p) - torch.matmul(Ky_norm,Ex_p))
-                Exy_m = diag_post_multiply(E_eigvec,z_phase_m)
-                Ex_m = Exy_m[:self.order_N,:]
-                Ey_m = Exy_m[self.order_N:,:]
-                Hz_m = solve_left(self.mu_conv[layer_num[zi]],torch.matmul(Kx_norm,Ey_m) - torch.matmul(Ky_norm,Ex_m))
-                Hxy_p = diag_post_multiply(H_eigvec,z_phase_p)
-                Hx_p = Hxy_p[:self.order_N,:]
-                Hy_p = Hxy_p[self.order_N:,:]
-                Ez_p = solve_left(self.eps_conv[layer_num[zi]],torch.matmul(Ky_norm,Hx_p) - torch.matmul(Kx_norm,Hy_p))
-                Hxy_m = diag_post_multiply(-H_eigvec,z_phase_m)
-                Hx_m = Hxy_m[:self.order_N,:]
-                Hy_m = Hxy_m[self.order_N:,:]
-                Ez_m = solve_left(self.eps_conv[layer_num[zi]],torch.matmul(Ky_norm,Hx_m) - torch.matmul(Kx_norm,Hy_m))
-                
-                Ex_mn = torch.matmul(Ex_p,Cp) + torch.matmul(Ex_m,Cm)
-                Ey_mn = torch.matmul(Ey_p,Cp) + torch.matmul(Ey_m,Cm)
-                Ez_mn = torch.matmul(Ez_p,Cp) + torch.matmul(Ez_m,Cm)
-                Hx_mn = torch.matmul(Hx_p,Cp) + torch.matmul(Hx_m,Cm)
-                Hy_mn = torch.matmul(Hy_p,Cp) + torch.matmul(Hy_m,Cm)
-                Hz_mn = torch.matmul(Hz_p,Cp) + torch.matmul(Hz_m,Cm)
+            return [Ex_mn,Ey_mn,Ez_mn,Hx_mn,Hy_mn,Hz_mn]
 
-                # Spatial domain fields
-                xy_phase = torch.exp(1.j * self.omega * (self.Kx_norm_dn*x + self.Ky_norm_dn*y_axis))
-                Ex_split.append(torch.sum(Ex_mn.reshape(1,1,-1)*xy_phase,dim=2))
-                Ey_split.append(torch.sum(Ey_mn.reshape(1,1,-1)*xy_phase,dim=2))
-                Ez_split.append(torch.sum(Ez_mn.reshape(1,1,-1)*xy_phase,dim=2))
-                Hx_split.append(torch.sum(Hx_mn.reshape(1,1,-1)*xy_phase,dim=2))
-                Hy_split.append(torch.sum(Hy_mn.reshape(1,1,-1)*xy_phase,dim=2))
-                Hz_split.append(torch.sum(Hz_mn.reshape(1,1,-1)*xy_phase,dim=2))
+        if self.source_direction == 'forward':
+            C = torch.matmul(self.C[0][layer_id],self.E_i)
+        elif self.source_direction == 'backward':
+            C = torch.matmul(self.C[1][layer_id],self.E_i)
+        else:
+            raise RuntimeError('Invalid field source direction.')
 
-            prev_layer_num = layer_num[zi]
+        kz_norm = self.kz_norm[layer_id]
+        E_eigvec = self.E_eigvec[layer_id]
+        H_eigvec = self.H_eigvec[layer_id]
+        Cp = C[:2*self.order_N,0]
+        Cm = C[2*self.order_N:,0]
 
-        Ex = torch.cat(Ex_split,dim=1)
-        Ey = torch.cat(Ey_split,dim=1)
-        Ez = torch.cat(Ez_split,dim=1)
-        Hx = torch.cat(Hx_split,dim=1)
-        Hy = torch.cat(Hy_split,dim=1)
-        Hz = torch.cat(Hz_split,dim=1)
+        z_phase_p = torch.exp(1.j*self.omega*kz_norm.reshape([-1,1])*z_prop)
+        z_phase_m = torch.exp(1.j*self.omega*kz_norm.reshape([-1,1])*(self.thickness[layer_id]-z_prop))
 
-        return [Ex, Ey, Ez], [Hx, Hy, Hz]
+        Exy_p = E_eigvec.unsqueeze(-1)*z_phase_p.unsqueeze(0)
+        Ex_p = Exy_p[:self.order_N,:,:]
+        Ey_p = Exy_p[self.order_N:,:,:]
+        Hz_p_rhs = torch.matmul(Kx_norm,Ey_p.reshape([self.order_N,-1])) - torch.matmul(Ky_norm,Ex_p.reshape([self.order_N,-1]))
+        Hz_p = solve_left(self.mu_conv[layer_id],Hz_p_rhs).reshape_as(Ex_p)
+
+        Exy_m = E_eigvec.unsqueeze(-1)*z_phase_m.unsqueeze(0)
+        Ex_m = Exy_m[:self.order_N,:,:]
+        Ey_m = Exy_m[self.order_N:,:,:]
+        Hz_m_rhs = torch.matmul(Kx_norm,Ey_m.reshape([self.order_N,-1])) - torch.matmul(Ky_norm,Ex_m.reshape([self.order_N,-1]))
+        Hz_m = solve_left(self.mu_conv[layer_id],Hz_m_rhs).reshape_as(Ex_m)
+
+        Hxy_p = H_eigvec.unsqueeze(-1)*z_phase_p.unsqueeze(0)
+        Hx_p = Hxy_p[:self.order_N,:,:]
+        Hy_p = Hxy_p[self.order_N:,:,:]
+        Ez_p_rhs = torch.matmul(Ky_norm,Hx_p.reshape([self.order_N,-1])) - torch.matmul(Kx_norm,Hy_p.reshape([self.order_N,-1]))
+        Ez_p = solve_left(self.eps_conv[layer_id],Ez_p_rhs).reshape_as(Hx_p)
+
+        Hxy_m = -H_eigvec.unsqueeze(-1)*z_phase_m.unsqueeze(0)
+        Hx_m = Hxy_m[:self.order_N,:,:]
+        Hy_m = Hxy_m[self.order_N:,:,:]
+        Ez_m_rhs = torch.matmul(Ky_norm,Hx_m.reshape([self.order_N,-1])) - torch.matmul(Kx_norm,Hy_m.reshape([self.order_N,-1]))
+        Ez_m = solve_left(self.eps_conv[layer_id],Ez_m_rhs).reshape_as(Hx_m)
+
+        Cp = Cp.reshape([1,-1,1])
+        Cm = Cm.reshape([1,-1,1])
+        Ex_mn = torch.sum(Ex_p*Cp + Ex_m*Cm,dim=1)
+        Ey_mn = torch.sum(Ey_p*Cp + Ey_m*Cm,dim=1)
+        Ez_mn = torch.sum(Ez_p*Cp + Ez_m*Cm,dim=1)
+        Hx_mn = torch.sum(Hx_p*Cp + Hx_m*Cm,dim=1)
+        Hy_mn = torch.sum(Hy_p*Cp + Hy_m*Cm,dim=1)
+        Hz_mn = torch.sum(Hz_p*Cp + Hz_m*Cm,dim=1)
+
+        return [Ex_mn,Ey_mn,Ez_mn,Hx_mn,Hy_mn,Hz_mn]
 
     def field_xy(self,layer_num,x_axis,y_axis,z_prop=0.):
         '''

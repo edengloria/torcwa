@@ -78,17 +78,22 @@ class RCWASolver:
         legacy.source_planewave(**kwargs)
         return self
 
-    def field_plane(self, *, plane: str, axis0, axis1, offset=0.0, layer_num: int | None = None):
+    def field_plane(self, *, plane: str, axis0, axis1, offset=0.0, layer_num: int | None = None, chunk_size: int | None = None):
         legacy = self._require_solved()
-        if plane == "xz":
-            return legacy.field_xz(axis0, axis1, offset)
-        if plane == "yz":
-            return legacy.field_yz(axis0, axis1, offset)
-        if plane == "xy":
-            if layer_num is None:
-                raise ValueError("layer_num is required for xy field planes")
-            return legacy.field_xy(layer_num, axis0, axis1, z_prop=offset)
-        raise ValueError("plane must be one of 'xy', 'xz', or 'yz'")
+        previous_chunk_size = getattr(legacy, "field_chunk_size", None)
+        legacy.field_chunk_size = chunk_size if chunk_size is not None else self.config.options.field_chunk_size
+        try:
+            if plane == "xz":
+                return legacy.field_xz(axis0, axis1, offset)
+            if plane == "yz":
+                return legacy.field_yz(axis0, axis1, offset)
+            if plane == "xy":
+                if layer_num is None:
+                    raise ValueError("layer_num is required for xy field planes")
+                return legacy.field_xy(layer_num, axis0, axis1, z_prop=offset)
+            raise ValueError("plane must be one of 'xy', 'xz', or 'yz'")
+        finally:
+            legacy.field_chunk_size = previous_chunk_size
 
     def legacy_solver(self):
         return self._require_solved()
