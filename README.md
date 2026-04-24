@@ -1,4 +1,4 @@
-**torcwa-0.1.4.2**
+**torcwa-0.2.0.dev0**
 ======
 
 * License: LGPL
@@ -45,9 +45,9 @@ Installation
 ------------
 * Requirements
 
-	* Python version 3.8 or higher
+	* Python version 3.10 or higher
 
-	* PyTorch version 1.10.1 or higher
+	* PyTorch version 2.11 or higher
 
 	* For GPU operation, GPUs that support CUDA operations
 
@@ -55,7 +55,33 @@ Installation
 ```
 $ pip install torcwa
 ```
-* If the PyTorch version is lower than the required, it will automatically install PyTorch 1.10.1 or higher, but the CPU-only PyTorch or incompatible version may be installed. Therefore, **before installing using the above command, please install PyTorch version that is compatible with GPU**.
+* If the PyTorch version is lower than the required, it will automatically install PyTorch 2.11 or higher, but the CPU-only PyTorch or incompatible version may be installed. Therefore, **before installing using the above command, please install PyTorch version that is compatible with GPU**.
+
+* For development and validation in this repository:
+```
+$ python3 -m pip install -r requirements-dev.txt
+$ python3 -m pytest -q
+```
+
+<br/>
+
+Developer preview in 0.2.0.dev0
+------------
+This branch starts an accuracy-first v2 refactor while preserving the legacy `torcwa.rcwa` workflow.
+
+1. `torcwa.v2` adds a typed developer-preview API with `RCWAConfig`, `SolverOptions`, and `RCWASolver`.
+
+2. The legacy numerical path replaces key explicit inverse products with `torch.linalg.solve`-based helpers and removes selected explicit diagonal matrix products.
+
+3. `S_parameters(..., evanescent=...)` is the canonical spelling. The legacy `evanscent` spelling is still accepted as a deprecated alias.
+
+4. The eigendecomposition backward path no longer saves tensors on CPU, reducing CUDA synchronization/copy overhead.
+
+5. Validation and benchmark artifacts are included in:
+   - [v2 refactor notes](./docs/TORCWA_v2_refactor.md)
+   - [v2 QA and benchmark report](./docs/TORCWA_v2_QA_REPORT.md)
+   - [v2 migration guide](./docs/TORCWA_v2_MIGRATION.md)
+   - [changelog](./CHANGELOG.md)
 
 <br/>
 

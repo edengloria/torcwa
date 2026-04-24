@@ -1,7 +1,7 @@
 import torch
 
 '''
-Pytorch 1.10.1
+PyTorch 2.x
 Complex domain eigen-decomposition with numerical stability
 '''
 
@@ -10,18 +10,15 @@ class Eig(torch.autograd.Function):
 
     @staticmethod
     def forward(ctx,x):
-        ctx.input = x
         eigval, eigvec = torch.linalg.eig(x)
-        ctx.eigval = eigval.cpu()
-        ctx.eigvec = eigvec.cpu()
+        ctx.save_for_backward(x,eigval,eigvec)
         return eigval, eigvec
 
     @staticmethod
     def backward(ctx,grad_eigval,grad_eigvec):
-        eigval = ctx.eigval.to(grad_eigval)
-        eigvec = ctx.eigvec.to(grad_eigvec)
+        x, eigval, eigvec = ctx.saved_tensors
 
-        grad_eigval = torch.diag(grad_eigval)
+        grad_eigval = torch.diag_embed(grad_eigval)
         s = eigval.unsqueeze(-2) - eigval.unsqueeze(-1)
 
         # Lorentzian broadening: get small error but stabilizing the gradient calculation
@@ -32,13 +29,13 @@ class Eig(torch.autograd.Function):
         elif s.dtype == torch.complex128:
             F = torch.conj(s)/(torch.abs(s)**2 + 4.9e-324)
 
-        diag_indices = torch.linspace(0,F.shape[-1]-1,F.shape[-1],dtype=torch.int64)
+        diag_indices = torch.arange(F.shape[-1],dtype=torch.int64,device=F.device)
         F[diag_indices,diag_indices] = 0.
         XH = torch.transpose(torch.conj(eigvec),-2,-1)
         tmp = torch.conj(F) * torch.matmul(XH, grad_eigvec)
 
-        grad = torch.matmul(torch.matmul(torch.inverse(XH), grad_eigval + tmp), XH)
-        if not torch.is_complex(ctx.input):
+        grad = torch.matmul(torch.linalg.solve(XH, grad_eigval + tmp), XH)
+        if not torch.is_complex(x):
             grad = torch.real(grad)
 
         return grad
