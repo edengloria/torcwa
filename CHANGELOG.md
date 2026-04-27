@@ -20,6 +20,17 @@
   routed `RCWA.sweep(...)` through the fixed-geometry v2 sweep backend.
 - Added original-vs-current-vs-optimized performance comparison tooling and
   `docs/TORCWA_v3_PERFORMANCE_REPORT.md`.
+- Added per-simulation legacy `S_parameters(...)` normalization caches for
+  repeated diffraction-order and s/p polarization queries, with value caching
+  disabled for gradient-bearing port materials and cache keys guarded by port
+  tensor signatures.
+- Added a `memory_mode="memory"` homogeneous-layer structured path that avoids
+  dense homogeneous `P/Q` storage while preserving the balanced default path.
+- Added a `memory_mode="memory"` eigenmode-streaming path for internal field
+  reconstruction.
+- Normalized fixed-geometry sweep output requests outside the wavelength loop.
+- Added release-grade repeat controls and repeated diffraction-query coverage to
+  the original/current/optimized benchmark runner.
 
 ## 0.2.0.dev1
 

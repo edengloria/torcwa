@@ -97,10 +97,17 @@ def _legacy_solve(device, dtype, *, order, layers, output_eps=1.0, angle=0.0):
     return sim
 
 
-def _legacy_s_cases(label, device, *, quick):
+def _release_counts(repeats: int, warmup: int, *, release_grade: bool) -> tuple[int, int]:
+    if not release_grade:
+        return repeats, warmup
+    return max(repeats, 10), max(warmup, 3)
+
+
+def _legacy_s_cases(label, device, *, quick, release_grade):
     dtype = torch.complex64
     repeats = 3 if quick else 6
     warmup = 1 if quick else 2
+    repeats, warmup = _release_counts(repeats,warmup,release_grade=release_grade)
     records = []
 
     cases = [
@@ -130,13 +137,39 @@ def _legacy_s_cases(label, device, *, quick):
         return sim.S_parameters([0, 0], polarization="xx")
 
     records.append(_record(label, "s_parameter", "multilayer_patterned", device, dtype, f"order={list(order)} grid={grid}", multilayer, repeats=repeats, warmup=warmup))
+
+    order_list = [[i, j] for i in range(-order[0], order[0] + 1) for j in range(-order[1], order[1] + 1)]
+    repeated_sim = _legacy_solve(device, dtype, order=order, layers=[(80.0, eps)])
+
+    def repeated_diffraction_query():
+        return (
+            repeated_sim.S_parameters(order_list, polarization="xx"),
+            repeated_sim.S_parameters(order_list, polarization="yx"),
+            repeated_sim.S_parameters(order_list, polarization="ss"),
+            repeated_sim.S_parameters(order_list, polarization="pp"),
+        )
+
+    records.append(
+        _record(
+            label,
+            "s_parameter",
+            "repeated_diffraction_query",
+            device,
+            dtype,
+            f"order={list(order)} grid={grid} orders={len(order_list)}",
+            repeated_diffraction_query,
+            repeats=repeats,
+            warmup=warmup,
+        )
+    )
     return records
 
 
-def _legacy_field_cases(label, device, *, quick):
+def _legacy_field_cases(label, device, *, quick, release_grade):
     dtype = torch.complex64
     repeats = 3 if quick else 6
     warmup = 1
+    repeats, warmup = _release_counts(repeats,warmup,release_grade=release_grade)
     grid = 48 if quick else 96
     order = (2, 2) if quick else (3, 3)
     eps = _patterned_eps(device, grid=grid)
@@ -155,10 +188,11 @@ def _legacy_field_cases(label, device, *, quick):
     ]
 
 
-def _legacy_sweep_cases(label, device, *, quick):
+def _legacy_sweep_cases(label, device, *, quick, release_grade):
     dtype = torch.complex64
     repeats = 2 if quick else 4
     warmup = 1
+    repeats, warmup = _release_counts(repeats,warmup,release_grade=release_grade)
     grid = 40 if quick else 96
     order = (1, 1) if quick else (2, 2)
     counts = (3, 16) if quick else (16, 64)
@@ -181,12 +215,13 @@ def _legacy_sweep_cases(label, device, *, quick):
     return records
 
 
-def _legacy_stress_cases(label, device):
+def _legacy_stress_cases(label, device, *, release_grade):
     if device.type != "cuda":
         return []
     dtype = torch.complex64
     records = []
     for order, grid, repeats in [(10, 160, 3), (15, 224, 2), (20, 300, 2)]:
+        repeats, warmup = _release_counts(repeats,1,release_grade=release_grade)
         eps = _patterned_eps(device, grid=grid)
 
         def solve(order=order, eps=eps):
@@ -198,16 +233,17 @@ def _legacy_stress_cases(label, device):
             sim.solve_global_smatrix()
             return sim.S_parameters([0, 0], polarization="xx")
 
-        records.append(_record(label, "stress", f"order_{order}", device, dtype, f"order=[{order}, {order}] grid={grid}", solve, repeats=repeats, warmup=1))
+        records.append(_record(label, "stress", f"order_{order}", device, dtype, f"order=[{order}, {order}] grid={grid}", solve, repeats=repeats, warmup=warmup))
     return records
 
 
-def _modern_cases(label, device, *, quick):
+def _modern_cases(label, device, *, quick, release_grade):
     if not all(hasattr(torcwa, name) for name in ("RCWA", "Stack", "PlaneWave")):
         return []
     dtype = torch.complex64
     repeats = 3 if quick else 6
     warmup = 1
+    repeats, warmup = _release_counts(repeats,warmup,release_grade=release_grade)
     period = (300.0, 300.0)
     grid = 48 if quick else 96
     order = (2, 2) if quick else (3, 3)
@@ -236,7 +272,8 @@ def _modern_cases(label, device, *, quick):
             outputs=[torcwa.Output.transmission(order=(0, 0), polarization="x", name="txx")],
         )["txx"]
 
-    records.append(_record(label, "modern_api", f"sweep_{len(wavelengths)}", device, dtype, f"order={list(order)} grid={grid}", sweep, repeats=2 if quick else 4, warmup=1))
+    sweep_repeats, sweep_warmup = _release_counts(2 if quick else 4,1,release_grade=release_grade)
+    records.append(_record(label, "modern_api", f"sweep_{len(wavelengths)}", device, dtype, f"order={list(order)} grid={grid}", sweep, repeats=sweep_repeats, warmup=sweep_warmup))
     return records
 
 
@@ -257,17 +294,18 @@ def main() -> None:
     parser.add_argument("--devices", choices=("auto", "cpu", "cuda"), default="auto")
     parser.add_argument("--quick", action="store_true")
     parser.add_argument("--stress", action="store_true")
+    parser.add_argument("--release-grade", action="store_true", help="Use longer repeats/warmups for release reporting")
     parser.add_argument("--output")
     args = parser.parse_args()
 
     records = []
     for device in _devices(args.devices):
-        records.extend(_legacy_s_cases(args.label, device, quick=args.quick))
-        records.extend(_legacy_field_cases(args.label, device, quick=args.quick))
-        records.extend(_legacy_sweep_cases(args.label, device, quick=args.quick))
-        records.extend(_modern_cases(args.label, device, quick=args.quick))
+        records.extend(_legacy_s_cases(args.label, device, quick=args.quick, release_grade=args.release_grade))
+        records.extend(_legacy_field_cases(args.label, device, quick=args.quick, release_grade=args.release_grade))
+        records.extend(_legacy_sweep_cases(args.label, device, quick=args.quick, release_grade=args.release_grade))
+        records.extend(_modern_cases(args.label, device, quick=args.quick, release_grade=args.release_grade))
         if args.stress:
-            records.extend(_legacy_stress_cases(args.label, device))
+            records.extend(_legacy_stress_cases(args.label, device, release_grade=args.release_grade))
 
     payload = {
         "label": args.label,

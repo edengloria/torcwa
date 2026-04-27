@@ -72,6 +72,7 @@ class rcwa:
         self.stable_eig_grad = True if stable_eig_grad else False
         self.memory_mode = 'balanced'
         self.store_fields = True
+        self._s_parameter_cache = {}
 
         # Stability setting for inverse matrix of P and Q
         if avoid_Pinv_instability is True:
@@ -114,6 +115,8 @@ class rcwa:
         # Internal layer eigenmodes
         self.P, self.Q = [], []
         self.kz_norm, self.E_eigvec, self.H_eigvec = [], [], []
+        self._layer_homogeneous_structured = []
+        self._layer_P_transform = []
 
         # Internal layer mode coupling coefficiencts
         self.Cf, self.Cb = [], []
@@ -134,6 +137,7 @@ class rcwa:
         self.eps_in = torch.as_tensor(eps,dtype=self._dtype,device=self._device)
         self.mu_in = torch.as_tensor(mu,dtype=self._dtype,device=self._device)
         self.Sin = []
+        self._clear_s_parameter_cache()
 
     def add_output_layer(self,eps=1.,mu=1.):
         '''
@@ -148,6 +152,7 @@ class rcwa:
         self.eps_out = torch.as_tensor(eps,dtype=self._dtype,device=self._device)
         self.mu_out = torch.as_tensor(mu,dtype=self._dtype,device=self._device)
         self.Sout = []
+        self._clear_s_parameter_cache()
 
     def set_incident_angle(self,inc_ang,azi_ang,angle_layer='input'):
         '''
@@ -171,6 +176,7 @@ class rcwa:
             self.angle_layer = 'input'
 
         self._kvectors()
+        self._clear_s_parameter_cache()
 
     def add_layer(self,thickness,eps=1.,mu=1.):
         '''
@@ -192,11 +198,15 @@ class rcwa:
         self.thickness.append(thickness)
 
         if is_eps_homogenous and is_mu_homogenous:
-            self._eigen_decomposition_homogenous(eps,mu)
+            if getattr(self,'memory_mode','balanced') == 'memory' and self.avoid_Pinv_instability is False:
+                self._eigen_decomposition_homogenous_structured(eps,mu)
+            else:
+                self._eigen_decomposition_homogenous(eps,mu)
         else:
             self._eigen_decomposition()
 
         self._solve_layer_smatrix()
+        self._clear_s_parameter_cache()
 
     # Solve simulation
     def solve_global_smatrix(self):
@@ -240,6 +250,7 @@ class rcwa:
 
         self.S = [S11, S21, S12, S22]
         self.C = C
+        self._clear_s_parameter_cache()
 
     # Returns
     def diffraction_angle(self,orders,*,layer='output',unit='radian'):
@@ -351,6 +362,7 @@ class rcwa:
             warnings.warn('Parameter "evanscent" is deprecated. Use "evanescent" instead.',DeprecationWarning)
             evanescent = evanscent
 
+        orders_key = self._orders_input_key(orders)
         orders = torch.as_tensor(orders,dtype=torch.int64,device=self._device).reshape([-1,2])
 
         if direction in ['f', 'forward']:
@@ -373,11 +385,12 @@ class rcwa:
             warnings.warn('Invalid polarization. Set as xx.',UserWarning)
             polarization = 'xx'
 
+        ref_order_key = self._orders_input_key(ref_order)
         ref_order = torch.as_tensor(ref_order,dtype=torch.int64,device=self._device).reshape([1,2])
 
         # Matching order indices
-        order_indices = self._matching_indices(orders)
-        ref_order_index = self._matching_indices(ref_order)
+        order_indices = self._matching_indices_cached(orders,orders_key)
+        ref_order_index = self._matching_indices_cached(ref_order,ref_order_key)
 
         if polarization in ['xx', 'yx', 'xy', 'yy']:
             # Matching order indices with polarization
@@ -388,18 +401,7 @@ class rcwa:
 
             # power normalization factor
             if power_norm:
-                Kz_norm_dn_in_complex = torch.sqrt(self.eps_in*self.mu_in - self.Kx_norm_dn**2 - self.Ky_norm_dn**2)
-                is_evanescent_in = torch.abs(torch.real(Kz_norm_dn_in_complex) / torch.imag(Kz_norm_dn_in_complex)) < evanescent
-                Kz_norm_dn_in = torch.where(is_evanescent_in,torch.real(torch.zeros_like(Kz_norm_dn_in_complex)),torch.real(Kz_norm_dn_in_complex))
-                Kz_norm_dn_in = torch.hstack((Kz_norm_dn_in,Kz_norm_dn_in))
-
-                Kz_norm_dn_out_complex = torch.sqrt(self.eps_out*self.mu_out - self.Kx_norm_dn**2 - self.Ky_norm_dn**2)
-                is_evanescent_out = torch.abs(torch.real(Kz_norm_dn_out_complex) / torch.imag(Kz_norm_dn_out_complex)) < evanescent
-                Kz_norm_dn_out = torch.where(is_evanescent_out,torch.real(torch.zeros_like(Kz_norm_dn_out_complex)),torch.real(Kz_norm_dn_out_complex))
-                Kz_norm_dn_out = torch.hstack((Kz_norm_dn_out,Kz_norm_dn_out))
-
-                Kx_norm_dn = torch.hstack((torch.real(self.Kx_norm_dn),torch.real(self.Kx_norm_dn)))
-                Ky_norm_dn = torch.hstack((torch.real(self.Ky_norm_dn),torch.real(self.Ky_norm_dn)))
+                Kz_norm_dn_in,Kz_norm_dn_out,Kx_norm_dn,Ky_norm_dn = self._s_parameter_power_terms(evanescent)
 
                 if polarization == 'xx':
                     numerator_pol, denominator_pol = Kx_norm_dn, Kx_norm_dn
@@ -444,46 +446,18 @@ class rcwa:
             return S
         
         elif polarization in ['pp', 'sp', 'ps', 'ss']:
-            if direction == 'forward' and port == 'transmission':
-                idx = 0
-                order_sign, ref_sign = 1, 1
-                order_k0_norm2 = self.eps_out * self.mu_out
-                ref_k0_norm2 = self.eps_in * self.mu_in
-            elif direction == 'forward' and port == 'reflection':
-                idx = 1
-                order_sign, ref_sign = -1, 1
-                order_k0_norm2 = self.eps_in * self.mu_in
-                ref_k0_norm2 = self.eps_in * self.mu_in
-            elif direction == 'backward' and port == 'reflection':
-                idx = 2
-                order_sign, ref_sign = 1, -1
-                order_k0_norm2 = self.eps_out * self.mu_out
-                ref_k0_norm2 = self.eps_out * self.mu_out
-            elif direction == 'backward' and port == 'transmission':
-                idx = 3
-                order_sign, ref_sign = -1, -1
-                order_k0_norm2 = self.eps_in * self.mu_in
-                ref_k0_norm2 = self.eps_out * self.mu_out
-
-            order_Kx_norm_dn = self.Kx_norm_dn[order_indices]
-            order_Ky_norm_dn = self.Ky_norm_dn[order_indices]
-            order_Kt_norm_dn = torch.sqrt(order_Kx_norm_dn**2 + order_Ky_norm_dn**2)
-            order_Kz_norm_dn = order_sign*torch.abs(torch.real(torch.sqrt(order_k0_norm2 - order_Kx_norm_dn**2 - order_Ky_norm_dn**2)))
-            order_Kz_norm_dn_complex = torch.sqrt(order_k0_norm2 - order_Kx_norm_dn**2 - order_Ky_norm_dn**2)
-            order_is_evanescent = torch.abs(torch.real(order_Kz_norm_dn_complex) / torch.imag(order_Kz_norm_dn_complex)) < evanescent
-
-            order_inc_angle = torch.atan2(torch.real(order_Kt_norm_dn),order_Kz_norm_dn)
-            order_azi_angle = torch.atan2(torch.real(order_Ky_norm_dn),torch.real(order_Kx_norm_dn))
-
-            ref_Kx_norm_dn = self.Kx_norm_dn[ref_order_index]
-            ref_Ky_norm_dn = self.Ky_norm_dn[ref_order_index]
-            ref_Kt_norm_dn = torch.sqrt(ref_Kx_norm_dn**2 + ref_Ky_norm_dn**2)
-            ref_Kz_norm_dn = ref_sign*torch.abs(torch.real(torch.sqrt(ref_k0_norm2 - ref_Kx_norm_dn**2 - ref_Ky_norm_dn**2)))
-            ref_Kz_norm_dn_complex = torch.sqrt(ref_k0_norm2 - ref_Kx_norm_dn**2 - ref_Ky_norm_dn**2)
-            ref_is_evanescent = torch.abs(torch.real(ref_Kz_norm_dn_complex) / torch.imag(ref_Kz_norm_dn_complex)) < evanescent
-
-            ref_inc_angle = torch.atan2(torch.real(ref_Kt_norm_dn),ref_Kz_norm_dn)
-            ref_azi_angle = torch.atan2(torch.real(ref_Ky_norm_dn),torch.real(ref_Kx_norm_dn))
+            ps_cache_key = None
+            if orders_key is not None and ref_order_key is not None:
+                ps_cache_key = (orders_key,ref_order_key)
+            (
+                idx,
+                order_is_evanescent,
+                ref_is_evanescent,
+                order_inc_angle,
+                order_azi_angle,
+                ref_inc_angle,
+                ref_azi_angle,
+            ) = self._s_parameter_ps_terms(order_indices,ref_order_index,direction,port,evanescent,ps_cache_key)
 
             xx = self.S[idx][order_indices,ref_order_index]
             xy = self.S[idx][order_indices,ref_order_index+self.order_N]
@@ -521,18 +495,7 @@ class rcwa:
                     torch.cos(order_azi_angle) * torch.cos(ref_azi_angle) * yy
 
             if power_norm:
-                Kz_norm_dn_in_complex = torch.sqrt(self.eps_in*self.mu_in - self.Kx_norm_dn**2 - self.Ky_norm_dn**2)
-                is_evanescent_in = torch.abs(torch.real(Kz_norm_dn_in_complex) / torch.imag(Kz_norm_dn_in_complex)) < evanescent
-                Kz_norm_dn_in = torch.where(is_evanescent_in,torch.real(torch.zeros_like(Kz_norm_dn_in_complex)),torch.real(Kz_norm_dn_in_complex))
-                Kz_norm_dn_in = torch.hstack((Kz_norm_dn_in,Kz_norm_dn_in))
-
-                Kz_norm_dn_out_complex = torch.sqrt(self.eps_out*self.mu_out - self.Kx_norm_dn**2 - self.Ky_norm_dn**2)
-                is_evanescent_out = torch.abs(torch.real(Kz_norm_dn_out_complex) / torch.imag(Kz_norm_dn_out_complex)) < evanescent
-                Kz_norm_dn_out = torch.where(is_evanescent_out,torch.abs(torch.real(Kz_norm_dn_out_complex)),torch.real(Kz_norm_dn_out_complex))
-                Kz_norm_dn_out = torch.hstack((Kz_norm_dn_out,Kz_norm_dn_out))
-
-                Kx_norm_dn = torch.hstack((torch.real(self.Kx_norm_dn),torch.real(self.Kx_norm_dn)))
-                Ky_norm_dn = torch.hstack((torch.real(self.Ky_norm_dn),torch.real(self.Ky_norm_dn)))
+                Kz_norm_dn_in,Kz_norm_dn_out,Kx_norm_dn,Ky_norm_dn = self._s_parameter_power_terms(evanescent,output_abs=True)
 
                 if direction == 'forward' and port == 'transmission':
                     numerator_kz = Kz_norm_dn_out
@@ -794,6 +757,9 @@ class rcwa:
 
             return [Ex_mn,Ey_mn,Ez_mn,Hx_mn,Hy_mn,Hz_mn]
 
+        if getattr(self,'memory_mode','balanced') == 'memory':
+            return self._field_fourier_components_streamed(layer_id,z_prop)
+
         if self.source_direction == 'forward':
             C = torch.matmul(self.C[0][layer_id],self.E_i)
         elif self.source_direction == 'backward':
@@ -846,6 +812,72 @@ class rcwa:
         Hz_mn = torch.sum(Hz_p*Cp + Hz_m*Cm,dim=1)
 
         return [Ex_mn,Ey_mn,Ez_mn,Hx_mn,Hy_mn,Hz_mn]
+
+    def _field_fourier_components_streamed(self,layer_id,z_prop):
+        if self.source_direction == 'forward':
+            C = torch.matmul(self.C[0][layer_id],self.E_i)
+        elif self.source_direction == 'backward':
+            C = torch.matmul(self.C[1][layer_id],self.E_i)
+        else:
+            raise RuntimeError('Invalid field source direction.')
+
+        kz_norm = self.kz_norm[layer_id]
+        E_eigvec = self.E_eigvec[layer_id]
+        H_eigvec = self.H_eigvec[layer_id]
+        Cp = C[:2*self.order_N,0]
+        Cm = C[2*self.order_N:,0]
+        z_count = z_prop.shape[-1]
+        mode_count = E_eigvec.shape[1]
+        mode_chunk = max(1,min(mode_count,32))
+
+        components = [torch.zeros([self.order_N,z_count],dtype=self._dtype,device=self._device) for _ in range(6)]
+
+        for start in range(0,mode_count,mode_chunk):
+            stop = min(start+mode_chunk,mode_count)
+            mode_slice = slice(start,stop)
+            kz_sel = kz_norm[mode_slice].reshape([-1,1])
+            z_phase_p = torch.exp(1.j*self.omega*kz_sel*z_prop)
+            z_phase_m = torch.exp(1.j*self.omega*kz_sel*(self.thickness[layer_id]-z_prop))
+
+            E_sel = E_eigvec[:,mode_slice]
+            H_sel = H_eigvec[:,mode_slice]
+            Cp_sel = Cp[mode_slice].reshape([1,-1,1])
+            Cm_sel = Cm[mode_slice].reshape([1,-1,1])
+
+            Exy_p = E_sel.unsqueeze(-1)*z_phase_p.unsqueeze(0)
+            Ex_p = Exy_p[:self.order_N,:,:]
+            Ey_p = Exy_p[self.order_N:,:,:]
+            Hz_p_rhs = self._dn_pre_multiply(self.Kx_norm_dn,Ey_p.reshape([self.order_N,-1])) - self._dn_pre_multiply(self.Ky_norm_dn,Ex_p.reshape([self.order_N,-1]))
+
+            Exy_m = E_sel.unsqueeze(-1)*z_phase_m.unsqueeze(0)
+            Ex_m = Exy_m[:self.order_N,:,:]
+            Ey_m = Exy_m[self.order_N:,:,:]
+            Hz_m_rhs = self._dn_pre_multiply(self.Kx_norm_dn,Ey_m.reshape([self.order_N,-1])) - self._dn_pre_multiply(self.Ky_norm_dn,Ex_m.reshape([self.order_N,-1]))
+            Hz_p_flat, Hz_m_flat = self._solve_left_many_policy(self.mu_conv[layer_id],[Hz_p_rhs,Hz_m_rhs])
+            Hz_p = Hz_p_flat.reshape_as(Ex_p)
+            Hz_m = Hz_m_flat.reshape_as(Ex_m)
+
+            Hxy_p = H_sel.unsqueeze(-1)*z_phase_p.unsqueeze(0)
+            Hx_p = Hxy_p[:self.order_N,:,:]
+            Hy_p = Hxy_p[self.order_N:,:,:]
+            Ez_p_rhs = self._dn_pre_multiply(self.Ky_norm_dn,Hx_p.reshape([self.order_N,-1])) - self._dn_pre_multiply(self.Kx_norm_dn,Hy_p.reshape([self.order_N,-1]))
+
+            Hxy_m = -H_sel.unsqueeze(-1)*z_phase_m.unsqueeze(0)
+            Hx_m = Hxy_m[:self.order_N,:,:]
+            Hy_m = Hxy_m[self.order_N:,:,:]
+            Ez_m_rhs = self._dn_pre_multiply(self.Ky_norm_dn,Hx_m.reshape([self.order_N,-1])) - self._dn_pre_multiply(self.Kx_norm_dn,Hy_m.reshape([self.order_N,-1]))
+            Ez_p_flat, Ez_m_flat = self._solve_left_many_policy(self.eps_conv[layer_id],[Ez_p_rhs,Ez_m_rhs])
+            Ez_p = Ez_p_flat.reshape_as(Hx_p)
+            Ez_m = Ez_m_flat.reshape_as(Hx_m)
+
+            components[0] += torch.sum(Ex_p*Cp_sel + Ex_m*Cm_sel,dim=1)
+            components[1] += torch.sum(Ey_p*Cp_sel + Ey_m*Cm_sel,dim=1)
+            components[2] += torch.sum(Ez_p*Cp_sel + Ez_m*Cm_sel,dim=1)
+            components[3] += torch.sum(Hx_p*Cp_sel + Hx_m*Cm_sel,dim=1)
+            components[4] += torch.sum(Hy_p*Cp_sel + Hy_m*Cm_sel,dim=1)
+            components[5] += torch.sum(Hz_p*Cp_sel + Hz_m*Cm_sel,dim=1)
+
+        return components
 
     def _field_xy_from_components(self,x_axis,y_axis,components,chunk_size=None):
         x_chunk = self._field_auto_chunk(len(x_axis),chunk_size)
@@ -998,6 +1030,153 @@ class rcwa:
         )
         return self._homogeneous_dense(result)
 
+    def _homogeneous_solve_diagonal_dense(self,transform,diagonal):
+        a,b,c,d = transform
+        top_diag = diagonal[:self.order_N]
+        bottom_diag = diagonal[self.order_N:]
+        det = a*d - b*c
+        return torch.hstack((
+            torch.vstack((torch.diag(d*top_diag/det),torch.diag(-c*top_diag/det))),
+            torch.vstack((torch.diag(-b*bottom_diag/det),torch.diag(a*bottom_diag/det))),
+        ))
+
+    def _clear_s_parameter_cache(self):
+        self._s_parameter_cache = {}
+
+    @staticmethod
+    def _orders_input_key(orders):
+        if isinstance(orders,torch.Tensor) and orders.device.type != 'cpu':
+            return None
+        tensor = torch.as_tensor(orders,dtype=torch.int64).reshape([-1,2])
+        return tuple(tuple(int(v) for v in row) for row in tensor.tolist())
+
+    def _matching_indices_cached(self,orders,orders_key=None):
+        if orders_key is None:
+            return self._matching_indices(orders.clone())
+        key = ('matching_indices',orders_key)
+        cached = self._s_parameter_cache.get(key)
+        if cached is not None:
+            return cached
+        indices = self._matching_indices(orders.clone())
+        self._s_parameter_cache[key] = indices
+        return indices
+
+    def _s_parameter_material_cacheable(self):
+        return not any(
+            torch.is_tensor(value) and value.requires_grad
+            for value in (self.eps_in,self.mu_in,self.eps_out,self.mu_out)
+        )
+
+    @staticmethod
+    def _s_parameter_tensor_signature(value):
+        if not torch.is_tensor(value):
+            return (type(value).__name__,value)
+        return (
+            int(value.data_ptr()) if value.device.type != 'meta' else None,
+            int(getattr(value,'_version',0)),
+            tuple(value.shape),
+            str(value.dtype),
+            str(value.device),
+        )
+
+    def _s_parameter_port_signature(self):
+        return tuple(
+            self._s_parameter_tensor_signature(value)
+            for value in (self.eps_in,self.mu_in,self.eps_out,self.mu_out)
+        )
+
+    def _s_parameter_power_terms(self,evanescent,*,output_abs=False):
+        cacheable = self._s_parameter_material_cacheable()
+        key = None
+        if cacheable:
+            key = ('power_terms',self._s_parameter_port_signature(),float(evanescent),bool(output_abs))
+            cached = self._s_parameter_cache.get(key)
+            if cached is not None:
+                return cached
+
+        Kz_norm_dn_in_complex = torch.sqrt(self.eps_in*self.mu_in - self.Kx_norm_dn**2 - self.Ky_norm_dn**2)
+        is_evanescent_in = torch.abs(torch.real(Kz_norm_dn_in_complex) / torch.imag(Kz_norm_dn_in_complex)) < evanescent
+        Kz_norm_dn_in = torch.where(is_evanescent_in,torch.real(torch.zeros_like(Kz_norm_dn_in_complex)),torch.real(Kz_norm_dn_in_complex))
+        Kz_norm_dn_in = torch.hstack((Kz_norm_dn_in,Kz_norm_dn_in))
+
+        Kz_norm_dn_out_complex = torch.sqrt(self.eps_out*self.mu_out - self.Kx_norm_dn**2 - self.Ky_norm_dn**2)
+        is_evanescent_out = torch.abs(torch.real(Kz_norm_dn_out_complex) / torch.imag(Kz_norm_dn_out_complex)) < evanescent
+        if output_abs:
+            Kz_norm_dn_out = torch.where(is_evanescent_out,torch.abs(torch.real(Kz_norm_dn_out_complex)),torch.real(Kz_norm_dn_out_complex))
+        else:
+            Kz_norm_dn_out = torch.where(is_evanescent_out,torch.real(torch.zeros_like(Kz_norm_dn_out_complex)),torch.real(Kz_norm_dn_out_complex))
+        Kz_norm_dn_out = torch.hstack((Kz_norm_dn_out,Kz_norm_dn_out))
+
+        Kx_norm_dn = torch.hstack((torch.real(self.Kx_norm_dn),torch.real(self.Kx_norm_dn)))
+        Ky_norm_dn = torch.hstack((torch.real(self.Ky_norm_dn),torch.real(self.Ky_norm_dn)))
+        terms = (Kz_norm_dn_in,Kz_norm_dn_out,Kx_norm_dn,Ky_norm_dn)
+        if cacheable:
+            self._s_parameter_cache[key] = terms
+        return terms
+
+    def _s_parameter_ps_terms(self,order_indices,ref_order_index,direction,port,evanescent,cache_key=None):
+        if not self._s_parameter_material_cacheable():
+            cache_key = None
+        if cache_key is not None:
+            key = ('ps_terms',self._s_parameter_port_signature(),cache_key,direction,port,float(evanescent))
+            cached = self._s_parameter_cache.get(key)
+            if cached is not None:
+                return cached
+
+        if direction == 'forward' and port == 'transmission':
+            idx = 0
+            order_sign, ref_sign = 1, 1
+            order_k0_norm2 = self.eps_out * self.mu_out
+            ref_k0_norm2 = self.eps_in * self.mu_in
+        elif direction == 'forward' and port == 'reflection':
+            idx = 1
+            order_sign, ref_sign = -1, 1
+            order_k0_norm2 = self.eps_in * self.mu_in
+            ref_k0_norm2 = self.eps_in * self.mu_in
+        elif direction == 'backward' and port == 'reflection':
+            idx = 2
+            order_sign, ref_sign = 1, -1
+            order_k0_norm2 = self.eps_out * self.mu_out
+            ref_k0_norm2 = self.eps_out * self.mu_out
+        elif direction == 'backward' and port == 'transmission':
+            idx = 3
+            order_sign, ref_sign = -1, -1
+            order_k0_norm2 = self.eps_in * self.mu_in
+            ref_k0_norm2 = self.eps_out * self.mu_out
+
+        order_Kx_norm_dn = self.Kx_norm_dn[order_indices]
+        order_Ky_norm_dn = self.Ky_norm_dn[order_indices]
+        order_Kt_norm_dn = torch.sqrt(order_Kx_norm_dn**2 + order_Ky_norm_dn**2)
+        order_Kz_norm_dn = order_sign*torch.abs(torch.real(torch.sqrt(order_k0_norm2 - order_Kx_norm_dn**2 - order_Ky_norm_dn**2)))
+        order_Kz_norm_dn_complex = torch.sqrt(order_k0_norm2 - order_Kx_norm_dn**2 - order_Ky_norm_dn**2)
+        order_is_evanescent = torch.abs(torch.real(order_Kz_norm_dn_complex) / torch.imag(order_Kz_norm_dn_complex)) < evanescent
+
+        order_inc_angle = torch.atan2(torch.real(order_Kt_norm_dn),order_Kz_norm_dn)
+        order_azi_angle = torch.atan2(torch.real(order_Ky_norm_dn),torch.real(order_Kx_norm_dn))
+
+        ref_Kx_norm_dn = self.Kx_norm_dn[ref_order_index]
+        ref_Ky_norm_dn = self.Ky_norm_dn[ref_order_index]
+        ref_Kt_norm_dn = torch.sqrt(ref_Kx_norm_dn**2 + ref_Ky_norm_dn**2)
+        ref_Kz_norm_dn = ref_sign*torch.abs(torch.real(torch.sqrt(ref_k0_norm2 - ref_Kx_norm_dn**2 - ref_Ky_norm_dn**2)))
+        ref_Kz_norm_dn_complex = torch.sqrt(ref_k0_norm2 - ref_Kx_norm_dn**2 - ref_Ky_norm_dn**2)
+        ref_is_evanescent = torch.abs(torch.real(ref_Kz_norm_dn_complex) / torch.imag(ref_Kz_norm_dn_complex)) < evanescent
+
+        ref_inc_angle = torch.atan2(torch.real(ref_Kt_norm_dn),ref_Kz_norm_dn)
+        ref_azi_angle = torch.atan2(torch.real(ref_Ky_norm_dn),torch.real(ref_Kx_norm_dn))
+
+        terms = (
+            idx,
+            order_is_evanescent,
+            ref_is_evanescent,
+            order_inc_angle,
+            order_azi_angle,
+            ref_inc_angle,
+            ref_azi_angle,
+        )
+        if cache_key is not None:
+            self._s_parameter_cache[key] = terms
+        return terms
+
     def _matching_indices(self,orders):
         orders[orders[:,0]<-self.order[0],0] = int(-self.order[0])
         orders[orders[:,0]>self.order[0],0] = int(self.order[0])
@@ -1149,6 +1328,8 @@ class rcwa:
         return key,material_ref
     
     def _eigen_decomposition_homogenous(self,eps,mu):
+        self._layer_homogeneous_structured.append(False)
+        self._layer_P_transform.append(None)
         kx = self.Kx_norm_dn
         ky = self.Ky_norm_dn
         eye = torch.eye(self.order_N,dtype=self._dtype,device=self._device)
@@ -1175,7 +1356,35 @@ class rcwa:
         self.kz_norm.append(kz_norm) 
         self.E_eigvec.append(E_eigvec)
 
+    def _eigen_decomposition_homogenous_structured(self,eps,mu):
+        eps = torch.as_tensor(eps,dtype=self._dtype,device=self._device)
+        mu = torch.as_tensor(mu,dtype=self._dtype,device=self._device)
+        kx = self.Kx_norm_dn
+        ky = self.Ky_norm_dn
+
+        P_transform = (
+            kx*ky/eps,
+            mu - kx*kx/eps,
+            -mu + ky*ky/eps,
+            -ky*kx/eps,
+        )
+
+        self._layer_homogeneous_structured.append(True)
+        self._layer_P_transform.append(P_transform)
+        self.P.append(None)
+        self.Q.append(None)
+
+        E_eigvec = torch.eye(2*self.order_N,dtype=self._dtype,device=self._device)
+        kz_norm = torch.sqrt(eps*mu - self.Kx_norm_dn**2 - self.Ky_norm_dn**2)
+        kz_norm = torch.where(torch.imag(kz_norm)<0,torch.conj(kz_norm),kz_norm)
+        kz_norm = torch.cat((kz_norm,kz_norm))
+
+        self.kz_norm.append(kz_norm)
+        self.E_eigvec.append(E_eigvec)
+
     def _eigen_decomposition(self):
+        self._layer_homogeneous_structured.append(False)
+        self._layer_P_transform.append(None)
         Kx_norm = torch.diag(self.Kx_norm_dn)
         Ky_norm = torch.diag(self.Ky_norm_dn)
 
@@ -1210,9 +1419,13 @@ class rcwa:
     def _solve_layer_smatrix(self):
         phase = torch.exp(1.j*self.omega*self.kz_norm[-1]*self.thickness[-1])
         E_kz = diag_post_multiply(self.E_eigvec[-1],self.kz_norm[-1])
-        P_lu, P_pivots = lu_factor_left(self.P[-1])
+        is_structured_homogeneous = self._layer_homogeneous_structured[-1]
+        if is_structured_homogeneous:
+            self.H_eigvec.append(self._homogeneous_solve_diagonal_dense(self._layer_P_transform[-1],self.kz_norm[-1]))
+        else:
+            P_lu, P_pivots = lu_factor_left(self.P[-1])
 
-        if self.avoid_Pinv_instability == True:
+        if (not is_structured_homogeneous) and self.avoid_Pinv_instability == True:
             eye = torch.eye(self.P[-1].shape[-1],dtype=self._dtype,device=self._device)
             Q_lu, Q_pivots = lu_factor_left(self.Q[-1])
             Pinv_tmp = lu_solve_left(P_lu,P_pivots,eye)
@@ -1230,7 +1443,7 @@ class rcwa:
                 self.H_eigvec.append(lu_solve_left(P_lu,P_pivots,E_kz))
             else:
                 self.H_eigvec.append(torch.matmul(self.Q[-1],diag_post_multiply(self.E_eigvec[-1],1/self.kz_norm[-1])))
-        else:
+        elif not is_structured_homogeneous:
             self.H_eigvec.append(lu_solve_left(P_lu,P_pivots,E_kz))
 
         Vf_inv_H = self._homogeneous_solve(self._Vf,self.H_eigvec[-1])

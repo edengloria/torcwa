@@ -115,9 +115,14 @@ class RCWASolver:
         freqs_tensor = torch.as_tensor(freqs, dtype=real_dtype, device=options.device).reshape([-1])
         incident_tensor = self._sweep_values(incident_angles, len(freqs_tensor), real_dtype, options.device)
         azimuth_tensor = self._sweep_values(azimuth_angles, len(freqs_tensor), real_dtype, options.device)
-        requests = requests or [{"name": "txx", "orders": [0, 0], "polarization": "xx"}]
+        raw_requests = requests or [{"name": "txx", "orders": [0, 0], "polarization": "xx"}]
+        prepared_requests = []
+        for request_index, request in enumerate(raw_requests):
+            request_kwargs = dict(request)
+            name = str(request_kwargs.pop("name", f"request_{request_index}"))
+            prepared_requests.append((name, request_kwargs))
 
-        outputs: dict[str, list[torch.Tensor]] = {}
+        outputs: dict[str, list[torch.Tensor]] = {name: [] for name, _ in prepared_requests}
         for idx in range(len(freqs_tensor)):
             input_layer = cfg.input_layer
             output_layer = cfg.output_layer
@@ -132,10 +137,8 @@ class RCWASolver:
             sweep_solver.solve()
             legacy = sweep_solver.legacy_solver()
 
-            for request_index, request in enumerate(requests):
-                request_kwargs = dict(request)
-                name = str(request_kwargs.pop("name", f"request_{request_index}"))
-                outputs.setdefault(name, []).append(legacy.S_parameters(**request_kwargs))
+            for name, request_kwargs in prepared_requests:
+                outputs[name].append(legacy.S_parameters(**request_kwargs))
 
         return {name: torch.stack(values, dim=0) for name, values in outputs.items()}
 

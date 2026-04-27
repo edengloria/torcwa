@@ -195,3 +195,83 @@ def test_v2_solve_sweep_matches_manual_fixed_geometry_loop():
     assert torch.allclose(sweep["txx"], torch.stack(manual_txx, dim=0))
     assert torch.allclose(sweep["tyy"], torch.stack(manual_tyy, dim=0))
     assert len(torcwa.rcwa._material_conv_cache) == 1
+
+
+def test_legacy_s_parameter_normalization_cache_is_equivalent():
+    sim = _cpu_solver(order=(1, 1), dtype=torch.complex128)
+    sim.add_layer(thickness=80.0, eps=2.25, mu=1.0)
+    sim.solve_global_smatrix()
+    orders = torch.tensor([[0, 0], [1, 0], [0, 1]], dtype=torch.int64)
+
+    first = sim.S_parameters(orders, polarization="xx")
+    cache_size = len(sim._s_parameter_cache)
+    second = sim.S_parameters(orders, polarization="xx")
+
+    assert cache_size > 0
+    assert len(sim._s_parameter_cache) == cache_size
+    assert torch.allclose(first, second, atol=1e-12, rtol=1e-12)
+
+
+def test_memory_mode_homogeneous_structured_path_matches_balanced():
+    device = torch.device("cpu")
+    dtype = torch.complex128
+    balanced = torcwa.rcwa(freq=1 / 500, order=[1, 1], L=[300.0, 300.0], dtype=dtype, device=device)
+    balanced.memory_mode = "balanced"
+    balanced.set_incident_angle(0.0, 0.0)
+    balanced.add_layer(thickness=80.0, eps=2.25, mu=1.0)
+    balanced.solve_global_smatrix()
+    balanced.source_planewave(amplitude=[1.0, 0.0], direction="forward", notation="xy")
+
+    memory = torcwa.rcwa(freq=1 / 500, order=[1, 1], L=[300.0, 300.0], dtype=dtype, device=device)
+    memory.memory_mode = "memory"
+    memory.set_incident_angle(0.0, 0.0)
+    memory.add_layer(thickness=80.0, eps=2.25, mu=1.0)
+    memory.solve_global_smatrix()
+    memory.source_planewave(amplitude=[1.0, 0.0], direction="forward", notation="xy")
+
+    assert memory.P[-1] is None
+    assert torch.allclose(
+        memory.S_parameters([0, 0], polarization="xx"),
+        balanced.S_parameters([0, 0], polarization="xx"),
+        atol=1e-10,
+        rtol=1e-10,
+    )
+
+    x_axis = torch.linspace(0.0, 300.0, 6)
+    z_axis = torch.linspace(-10.0, 90.0, 5)
+    mem_electric, mem_magnetic = memory.field_xz(x_axis, z_axis, 150.0)
+    bal_electric, bal_magnetic = balanced.field_xz(x_axis, z_axis, 150.0)
+    assert torch.allclose(mem_electric[0], bal_electric[0], atol=1e-9, rtol=1e-9)
+    assert torch.allclose(mem_magnetic[1], bal_magnetic[1], atol=1e-9, rtol=1e-9)
+
+
+def test_memory_mode_patterned_field_streaming_matches_balanced():
+    device = torch.device("cpu")
+    dtype = torch.complex64
+    lattice = [300.0, 300.0]
+    geo = torcwa.geometry(Lx=lattice[0], Ly=lattice[1], nx=28, ny=28, edge_sharpness=30.0, dtype=torch.float32, device=device)
+    mask = geo.rectangle(Wx=110.0, Wy=90.0, Cx=150.0, Cy=150.0)
+    eps = mask * 2.25 + (1.0 - mask)
+
+    def build(mode):
+        sim = torcwa.rcwa(freq=1 / 500, order=[1, 1], L=lattice, dtype=dtype, device=device)
+        sim.memory_mode = mode
+        sim.set_incident_angle(0.0, 0.0)
+        sim.add_layer(thickness=70.0, eps=eps)
+        sim.solve_global_smatrix()
+        sim.source_planewave(amplitude=[1.0, 0.0], direction="forward", notation="xy")
+        return sim
+
+    balanced = build("balanced")
+    memory = build("memory")
+    x_axis = torch.linspace(0.0, lattice[0], 6)
+    y_axis = torch.linspace(0.0, lattice[1], 5)
+    z_axis = torch.linspace(-10.0, 80.0, 4)
+
+    mem_xz, _ = memory.field_xz(x_axis, z_axis, lattice[1] / 2)
+    bal_xz, _ = balanced.field_xz(x_axis, z_axis, lattice[1] / 2)
+    mem_xy, _ = memory.field_xy(0, x_axis, y_axis, z_prop=20.0)
+    bal_xy, _ = balanced.field_xy(0, x_axis, y_axis, z_prop=20.0)
+
+    assert torch.allclose(mem_xz[0], bal_xz[0], atol=5e-5, rtol=5e-4)
+    assert torch.allclose(mem_xy[0], bal_xy[0], atol=5e-5, rtol=5e-4)
