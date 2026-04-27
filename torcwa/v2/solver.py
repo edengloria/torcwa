@@ -163,6 +163,7 @@ class RCWASolver:
             max_Pinv_instability=options.max_pinv_instability,
         )
         sim.memory_mode = options.memory_mode
+        sim.store_fields = options.store_fields
         if cfg.input_layer.eps != 1.0 or cfg.input_layer.mu != 1.0:
             sim.add_input_layer(eps=cfg.input_layer.eps, mu=cfg.input_layer.mu)
         if cfg.output_layer.eps != 1.0 or cfg.output_layer.mu != 1.0:

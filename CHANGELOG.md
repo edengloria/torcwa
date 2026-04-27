@@ -1,5 +1,26 @@
 # Changelog
 
+## 0.3.0.dev0
+
+- Added the modern public `torcwa.RCWA + torcwa.Stack + torcwa.PlaneWave`
+  workflow for researcher-facing simulations.
+- Added `Result` helpers for transmission, reflection, diffraction tables,
+  power balance, and field-plane reconstruction.
+- Added `MaterialGrid`, `UnitCell`, and `torcwa.material.mix(...)` as the
+  simple differentiable material/geometry path.
+- Added `Output` and loop-backed `RCWA.sweep(...)` for wavelength sweeps.
+- Added the `torcwa.core` helper namespace as the stable boundary for ongoing
+  numerical-core modularization.
+- Added modern API examples and regression tests against the legacy solver.
+- Added `SolverOptions.store_fields` and `RCWA(..., store_fields=False)` /
+  `solve(..., store_fields=False)` for S-parameter-only solves.
+- Propagated `field_chunk_size` from modern `RCWA` options into
+  `Result.fields.plane(...)`.
+- Cached repeated `Result` order/S-parameter/diffraction table queries and
+  routed `RCWA.sweep(...)` through the fixed-geometry v2 sweep backend.
+- Added original-vs-current-vs-optimized performance comparison tooling and
+  `docs/TORCWA_v3_PERFORMANCE_REPORT.md`.
+
 ## 0.2.0.dev1
 
 - Added committed Stanford S4 external-reference fixtures for homogeneous,

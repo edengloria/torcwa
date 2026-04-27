@@ -46,6 +46,7 @@ class SolverOptions:
     compile: bool = False
     field_chunk_size: Optional[int] = None
     memory_mode: MemoryMode = "balanced"
+    store_fields: bool = True
 
     def __post_init__(self) -> None:
         if self.dtype not in (torch.complex64, torch.complex128):

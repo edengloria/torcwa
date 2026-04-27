@@ -8,7 +8,7 @@ legacy `torcwa.rcwa` workflow.
 - Python: 3.10+
 - PyTorch: 2.11+
 - CUDA: optional but recommended for high-order dense workloads
-- Package version in this branch: `0.2.0.dev1`
+- Package version in this branch: `0.3.0.dev0`
 
 ## Legacy Code Keeps Working
 
@@ -54,6 +54,26 @@ solver.add_layer(thickness=80.0, eps=eps)
 solver.solve()
 txx = solver.s_parameter([0, 0], polarization="xx")
 ```
+
+## Modern v3 Public API
+
+New user-facing examples should prefer the v3 public API:
+
+```python
+import torcwa as tw
+
+stack = tw.Stack(period=(300.0, 300.0))
+stack.add_layer(thickness=80.0, eps=2.25)
+
+solver = tw.RCWA(wavelength=500.0, orders=(5, 5), device="cuda")
+result = solver.solve(stack, tw.PlaneWave(polarization="x"))
+
+txx = result.transmission(order=(0, 0), polarization="x")
+balance = result.power_balance(input_polarization="x")
+```
+
+Use `solve(..., store_fields=False)` or `SolverOptions(store_fields=False)` for
+S-parameter-only workloads where field reconstruction will not be needed.
 
 ## Field Chunking
 
@@ -161,6 +181,13 @@ Run the CUDA stress benchmark:
 python3 benchmarks/v2_microbench.py --quick --devices cuda --stress
 ```
 
+Run the original/current/optimized comparison harness:
+
+```bash
+git worktree add --detach /tmp/torcwa-original-51c0d24 51c0d24
+python3 benchmarks/original_comparison.py --label optimized --quick --devices auto --stress
+```
+
 Run the Fourier operator review benchmark:
 
 ```bash
@@ -181,6 +208,8 @@ python3 tools/generate_s4_fixtures.py --overwrite
   analytical, legacy, and external-solver fixtures.
 - Use `torcwa.v2.RCWASolver` for new experiments that should be easier to batch
   and validate later.
+- Use `torcwa.RCWA`, `torcwa.Stack`, and `torcwa.Result` for new researcher
+  notebooks and examples.
 - Replace `evanscent=` with `evanescent=` now; the alias remains only for
   compatibility.
 - Prefer explicit `torch.device` and complex dtype selection in scripts so

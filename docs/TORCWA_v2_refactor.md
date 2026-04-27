@@ -41,14 +41,15 @@ The v2 target runtime is Python 3.10+ with PyTorch 2.11+.
   `4M x 4M` system.
 - A validation-only Fourier convolution operator prototype is available for
   dense-vs-operator review; it is not used by the solver path.
-- S4 is now the designated external RCWA reference solver.  The repository has a
-  pending S4 fixture manifest, optional fixture generator, and pytest harness
-  that compares committed fixtures when they are available.
+- S4 is now the designated external RCWA reference solver.  The repository has
+  committed S4 fixtures, an optional fixture generator, and a pytest harness
+  that compares those fixtures during normal QA without requiring S4 at test
+  time.
 - The analytical/physical QA suite now includes Fabry-Perot slab phase,
   Brewster-angle suppression, near-critical evanescent classification,
   reciprocity, tangential field continuity, and finite-difference gradient
-  comparison.  Lossy slab absorption is tracked as a current `xfail` pending
-  S4-backed convention validation.
+  comparison.  Lossy absorption and patterned S4 fixtures are now part of the
+  normal committed QA gate.
 
 ## Accuracy Policy
 
@@ -70,10 +71,9 @@ Changes to the numerical core should be accepted only after they pass:
 
 ## Release Gate
 
-This branch is a v2 developer-preview foundation, not yet a final physics
-release.  The local QA pass covers analytical normal/oblique interface checks,
-Fabry-Perot slab phase, lossless conservation, selected field-continuity and
-gradient checks, CPU/CUDA smoke workloads, and reproducible microbenchmarks.
-Before promoting this to a stable major release, generate and commit official S4
-fixtures for representative gratings/metasurfaces and resolve the current lossy
-slab absorption `xfail`.
+This branch is now a v3 developer-preview foundation with a modern public API
+layer on top of the validated legacy/v2 numerical path.  The local QA pass
+covers analytical normal/oblique interface checks, Fabry-Perot slab phase,
+lossless conservation, lossy non-negative absorption, selected field-continuity
+and gradient checks, committed S4 fixtures, CPU/CUDA smoke workloads, and
+reproducible microbenchmarks.

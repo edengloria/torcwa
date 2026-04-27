@@ -1,4 +1,4 @@
-**torcwa-0.2.0.dev1**
+**torcwa-0.3.0.dev0**
 ======
 
 * License: LGPL
@@ -22,6 +22,54 @@ Features
 	* Permittivity and permeability of vacuum: both 1
 
 * Notation: exp(-*jωt*)
+
+<br/>
+
+Quickstart
+------------
+The modern public API follows a simple `Stack -> Source -> Result` workflow.
+`wavelength` is the default user-facing unit; the legacy frequency convention
+is still available through `torcwa.rcwa` and `torcwa.RCWA.from_frequency(...)`.
+
+```python
+import torch
+import torcwa as tw
+
+device = "cuda" if torch.cuda.is_available() else "cpu"
+
+stack = tw.Stack(period=(300.0, 300.0))
+stack.add_layer(thickness=80.0, eps=2.25)
+
+solver = tw.RCWA(wavelength=500.0, orders=(3, 3), device=device)
+source = tw.PlaneWave(angle=(0.0, 0.0), polarization="x")
+
+result = solver.solve(stack, source)
+
+t00 = result.transmission(order=(0, 0), polarization="x")
+r00 = result.reflection(order=(0, 0), polarization="x")
+balance = result.power_balance(input_polarization="x")
+
+print(t00, r00, balance)
+```
+
+Differentiable patterned materials can be built with PyTorch tensors:
+
+```python
+cell = tw.UnitCell(period=(300.0, 300.0), grid=(128, 128), device=device)
+mask = cell.rectangle(size=(120.0, 90.0), center=(150.0, 150.0))
+eps = tw.material.mix(1.0, 12.25, mask)
+
+stack = tw.Stack(period=(300.0, 300.0))
+stack.add_layer(thickness=80.0, eps=tw.MaterialGrid(eps, stack.period))
+
+result = tw.RCWA(wavelength=500.0, orders=(5, 5), device=device).solve(stack)
+fields = result.fields.plane(
+    "xz",
+    x=torch.linspace(0.0, 300.0, 128, device=device),
+    z=torch.linspace(-100.0, 180.0, 160, device=device),
+    y=150.0,
+)
+```
 
 <br/>
 
@@ -65,9 +113,21 @@ $ python3 -m pytest -q
 
 <br/>
 
-Developer preview in 0.2.0.dev1
+Developer preview in 0.3.0.dev0
 ------------
-This branch starts an accuracy-first v2 refactor while preserving the legacy `torcwa.rcwa` workflow.
+This branch adds a modern PyTorch-style public API while preserving the legacy `torcwa.rcwa` workflow.
+
+1. `torcwa.RCWA`, `torcwa.Stack`, `torcwa.PlaneWave`, `torcwa.Output`, and `torcwa.Result` provide the default researcher-facing workflow.
+
+2. `torcwa.MaterialGrid`, `torcwa.UnitCell`, and `torcwa.material.mix(...)` provide a simple differentiable material/geometry path.
+
+3. `result.transmission(...)`, `result.reflection(...)`, `result.power_balance(...)`, `result.diffraction_table(...)`, and `result.fields.plane(...)` wrap the validated legacy S-parameter and field paths.
+
+4. `torcwa.core` exposes the validated basis, Fourier, eig, linalg, and physics helper boundaries for future numerical-core refactoring.
+
+5. The legacy `torcwa.rcwa`, `torcwa.geometry`, and `torcwa.v2.RCWASolver` APIs remain available for existing notebooks and advanced validation workflows.
+
+Earlier v2 work included the following accuracy and performance changes:
 
 1. `torcwa.v2` adds a typed developer-preview API with `RCWAConfig`, `SolverOptions`, and `RCWASolver`.
 
@@ -87,6 +147,9 @@ This branch starts an accuracy-first v2 refactor while preserving the legacy `to
    - [v2 migration guide](./docs/TORCWA_v2_MIGRATION.md)
    - [Fourier operator review](./docs/TORCWA_v2_FOURIER_OPERATOR_REVIEW.md)
    - [S4 external validation](./docs/TORCWA_v2_S4_VALIDATION.md)
+   - [v3 developer notes](./docs/TORCWA_v3_DEVELOPER_NOTES.md)
+   - [v3 performance comparison](./docs/TORCWA_v3_PERFORMANCE_REPORT.md)
+   - [v3 next optimization plan](./docs/TORCWA_v3_NEXT_OPTIMIZATION_PLAN.md)
    - [changelog](./CHANGELOG.md)
 
 8. S4-backed external validation fixtures are committed for the core QA gate.
@@ -112,6 +175,20 @@ Updated features in 0.1.4
 
 TORCWA Examples
 ---------------
+Modern Python examples:
+
+1. [00_fresnel.py](./example/00_fresnel.py): Fresnel/interface calculation with the modern API
+
+2. [01_binary_grating.py](./example/01_binary_grating.py): Differentiable binary grating
+
+3. [02_metasurface_fields.py](./example/02_metasurface_fields.py): Field reconstruction from a patterned metasurface
+
+4. [03_gradient_optimization.py](./example/03_gradient_optimization.py): Autograd objective through geometry
+
+5. [04_wavelength_sweep.py](./example/04_wavelength_sweep.py): Wavelength sweep with `torcwa.Output`
+
+Legacy notebooks:
+
 1. [Example 0](./example/Example0.ipynb): Fresnel equation
 
 2. [Example 1](./example/Example1.ipynb): Simulation with rectangular meta-atom  

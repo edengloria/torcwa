@@ -71,6 +71,7 @@ class rcwa:
         # Stabilize the gradient of eigendecomposition
         self.stable_eig_grad = True if stable_eig_grad else False
         self.memory_mode = 'balanced'
+        self.store_fields = True
 
         # Stability setting for inverse matrix of P and Q
         if avoid_Pinv_instability is True:
@@ -204,12 +205,14 @@ class rcwa:
         '''
 
         # Initialization
+        retain_fields = getattr(self,'store_fields',True)
+
         if self.layer_N > 0:
             S11 = self.layer_S11[0]
             S21 = self.layer_S21[0]
             S12 = self.layer_S12[0]
             S22 = self.layer_S22[0]
-            C = [[self.Cf[0]], [self.Cb[0]]]
+            C = [[self.Cf[0]], [self.Cb[0]]] if retain_fields else [[], []]
         else:
             S11 = torch.eye(2*self.order_N,dtype=self._dtype,device=self._device)
             S21 = torch.zeros([2*self.order_N,2*self.order_N],dtype=self._dtype,device=self._device)
@@ -221,19 +224,19 @@ class rcwa:
         for i in range(self.layer_N-1):
             [S11, S21, S12, S22], C = self._RS_prod(Sm=[S11, S21, S12, S22],
                 Sn=[self.layer_S11[i+1], self.layer_S21[i+1], self.layer_S12[i+1], self.layer_S22[i+1]],
-                Cm=C, Cn=[[self.Cf[i+1]], [self.Cb[i+1]]])
+                Cm=C, Cn=[[self.Cf[i+1]], [self.Cb[i+1]]], retain_c=retain_fields)
 
         if hasattr(self,'Sin'):
             # input layer coupling
             [S11, S21, S12, S22], C = self._RS_prod(Sm=[self.Sin[0], self.Sin[1], self.Sin[2], self.Sin[3]],
                 Sn=[S11, S21, S12, S22],
-                Cm=[[],[]], Cn=C)
+                Cm=[[],[]], Cn=C, retain_c=retain_fields)
 
         if hasattr(self,'Sout'):
             # output layer coupling
             [S11, S21, S12, S22], C = self._RS_prod(Sm=[S11, S21, S12, S22],
                 Sn=[self.Sout[0], self.Sout[1], self.Sout[2], self.Sout[3]],
-                Cm=C, Cn=[[],[]])
+                Cm=C, Cn=[[],[]], retain_c=retain_fields)
 
         self.S = [S11, S21, S12, S22]
         self.C = C
@@ -641,6 +644,9 @@ class rcwa:
             - [Ex, Ey, Ez] (list[torch.Tensor]), [Hx, Hy, Hz] (list[torch.Tensor])
         '''
 
+        if not getattr(self,'store_fields',True):
+            raise RuntimeError('Field reconstruction is unavailable because store_fields=False.')
+
         if type(x_axis) != torch.Tensor or type(z_axis) != torch.Tensor:
             warnings.warn('x and z axis must be torch.Tensor type. Return None.',UserWarning)
             return None
@@ -660,6 +666,9 @@ class rcwa:
             Return
             - [Ex, Ey, Ez] (list[torch.Tensor]), [Hx, Hy, Hz] (list[torch.Tensor])
         '''
+
+        if not getattr(self,'store_fields',True):
+            raise RuntimeError('Field reconstruction is unavailable because store_fields=False.')
 
         if type(y_axis) != torch.Tensor or type(z_axis) != torch.Tensor:
             warnings.warn('y and z axis must be torch.Tensor type. Return None.',UserWarning)
@@ -871,6 +880,9 @@ class rcwa:
             Return
             - [Ex, Ey, Ez] (list[torch.Tensor]), [Hx, Hy, Hz] (list[torch.Tensor])
         '''
+
+        if not getattr(self,'store_fields',True):
+            raise RuntimeError('Field reconstruction is unavailable because store_fields=False.')
 
         if type(layer_num) != int:
             warnings.warn('Parameter "layer_num" must be int type. Return None.',UserWarning)
@@ -1253,7 +1265,7 @@ class rcwa:
             - torch.eye(2*self.order_N,dtype=self._dtype,device=self._device))
         self.layer_S22.append(torch.matmul(self.E_eigvec[-1], self.Cb[-1][:2*self.order_N,:]) + torch.matmul(E_phase,self.Cb[-1][2*self.order_N:,:]))
 
-    def _RS_prod(self,Sm,Sn,Cm,Cn):
+    def _RS_prod(self,Sm,Sn,Cm,Cn,retain_c=True):
         # S11 = S[0] / S21 = S[1] / S12 = S[2] / S22 = S[3]
         # Cf = C[0] / Cb = C[1]
 
@@ -1268,6 +1280,9 @@ class rcwa:
         S21 = Sm[1] + torch.matmul(Sm[3],tmp2_Sn1Sm0)
         S12 = Sn[2] + torch.matmul(Sn[0],tmp1_Sm2Sn3)
         S22 = torch.matmul(Sm[3],tmp2_Sn3)
+
+        if not retain_c:
+            return [S11, S21, S12, S22], [[], []]
 
         # Mode coupling coefficients
         C = [[],[]]
